@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Plus, History, GitCompare, Activity, Moon, Sun } from "lucide-react";
+import { Home, Plus, History, GitCompare, Activity, Moon, Sun, Cpu } from "lucide-react";
 import { clsx } from "clsx";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 const navItems = [
   { href: "/", label: "Dashboard", icon: Home },
   { href: "/benchmark/new", label: "New Benchmark", icon: Plus },
+  { href: "/recommend", label: "Recommend", icon: Cpu },
   { href: "/history", label: "History", icon: History },
   { href: "/compare", label: "Compare", icon: GitCompare },
 ];

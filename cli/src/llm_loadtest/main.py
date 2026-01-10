@@ -14,6 +14,7 @@ from llm_loadtest import __version__
 from llm_loadtest.commands.run import run_command
 from llm_loadtest.commands.info import info_command
 from llm_loadtest.commands.gpu import gpu_command
+from llm_loadtest.commands.recommend import recommend_command
 
 app = typer.Typer(
     name="llm-loadtest",
@@ -70,6 +71,7 @@ def main(
 app.command("run", help="Run load test against an LLM server")(run_command)
 app.command("info", help="Show system information")(info_command)
 app.command("gpu", help="Show GPU status")(gpu_command)
+app.command("recommend", help="Recommend GPU infrastructure for target workload")(recommend_command)
 
 
 if __name__ == "__main__":

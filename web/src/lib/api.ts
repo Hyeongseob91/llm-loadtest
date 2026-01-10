@@ -177,4 +177,132 @@ class ApiClient {
   }
 }
 
+// ============================================================
+// Phase 5: Infrastructure Recommendation Types
+// ============================================================
+
+export interface WorkloadSpec {
+  peak_concurrency: number;
+  daily_active_users?: number;
+  requests_per_user_per_day?: number;
+  avg_input_tokens?: number;
+  avg_output_tokens?: number;
+  ttft_target_ms?: number;
+  tpot_target_ms?: number;
+  goodput_target_percent?: number;
+}
+
+export interface TestConfig {
+  concurrency_steps?: number[];
+  num_requests_per_step?: number;
+}
+
+export interface RecommendRequest {
+  server_url: string;
+  model: string;
+  adapter?: string;
+  workload: WorkloadSpec;
+  headroom_percent?: number;
+  test_config?: TestConfig;
+  stream?: boolean;
+  warmup?: number;
+  timeout?: number;
+  api_key?: string;
+}
+
+export interface InfraProfile {
+  gpu_model: string;
+  gpu_count: number;
+  gpu_memory_gb: number;
+  max_concurrency_at_slo: number;
+  throughput_tokens_per_sec: number;
+  goodput_at_max_concurrency: number;
+  saturation_concurrency: number;
+  saturation_goodput: number;
+}
+
+export interface InfraRecommendation {
+  model_name: string;
+  recommended_gpu: string;
+  recommended_count: number;
+  tensor_parallelism: number;
+  estimated_max_concurrency: number;
+  estimated_goodput: number;
+  estimated_throughput: number;
+  headroom_percent: number;
+  calculation_formula: string;
+  reasoning: string;
+  estimated_monthly_cost_usd?: number;
+}
+
+export interface RecommendStatus {
+  run_id: string;
+  status: string;
+  server_url: string;
+  model: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  error?: string;
+}
+
+export interface RecommendResponse {
+  run_id: string;
+  recommendation: InfraRecommendation;
+  current_infra: InfraProfile;
+  workload: WorkloadSpec;
+  test_results: ConcurrencyResult[];
+  started_at: string;
+  completed_at: string;
+  duration_seconds: number;
+}
+
 export const api = new ApiClient();
+
+// Recommendation API methods (separate from main client for clarity)
+export const recommendApi = {
+  // Start recommendation
+  async startRecommend(request: RecommendRequest): Promise<{ run_id: string; status: string }> {
+    const response = await fetch(`${API_BASE}/recommend`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+
+  // Get recommendation status
+  async getStatus(runId: string): Promise<RecommendStatus> {
+    const response = await fetch(`${API_BASE}/recommend/${runId}`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+
+  // Get recommendation result
+  async getResult(runId: string): Promise<RecommendResponse> {
+    const response = await fetch(`${API_BASE}/recommend/${runId}/result`);
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+    return response.json();
+  },
+
+  // Delete recommendation
+  async deleteRecommend(runId: string): Promise<void> {
+    const response = await fetch(`${API_BASE}/recommend/${runId}`, {
+      method: "DELETE",
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || `HTTP ${response.status}`);
+    }
+  },
+};

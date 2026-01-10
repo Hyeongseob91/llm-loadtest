@@ -158,3 +158,85 @@ class BenchmarkResult(BaseModel):
             summary["avg_goodput_percent"] = avg_goodput
 
         return summary
+
+
+# ============================================================
+# Phase 5: Infrastructure Recommendation Models
+# ============================================================
+
+
+class WorkloadSpec(BaseModel):
+    """User-defined workload specification for infrastructure recommendation."""
+
+    # Traffic scale
+    daily_active_users: Optional[int] = Field(
+        default=None, description="Daily Active Users (DAU)"
+    )
+    peak_concurrency: int = Field(description="Peak concurrent requests (required)")
+    requests_per_user_per_day: int = Field(
+        default=10, description="Requests per user per day"
+    )
+
+    # Request characteristics
+    avg_input_tokens: int = Field(default=256, description="Average input tokens")
+    avg_output_tokens: int = Field(default=512, description="Average output tokens")
+
+    # SLO requirements
+    ttft_target_ms: float = Field(default=500.0, description="TTFT target (ms)")
+    tpot_target_ms: float = Field(default=50.0, description="TPOT target (ms)")
+    goodput_target_percent: float = Field(default=95.0, description="Goodput target (%)")
+
+
+class InfraProfile(BaseModel):
+    """Measured GPU infrastructure performance profile."""
+
+    # GPU information
+    gpu_model: str = Field(description="GPU model name (e.g., 'NVIDIA H100')")
+    gpu_count: int = Field(description="Current GPU count")
+    gpu_memory_gb: float = Field(description="Total VRAM in GB")
+
+    # Measured performance (from load test)
+    max_concurrency_at_slo: int = Field(
+        description="Maximum concurrency meeting SLO requirements"
+    )
+    throughput_tokens_per_sec: float = Field(description="Throughput (tokens/sec)")
+    goodput_at_max_concurrency: float = Field(
+        description="Goodput percentage at max concurrency"
+    )
+
+    # Saturation analysis
+    saturation_concurrency: int = Field(
+        description="Concurrency level where performance starts degrading"
+    )
+    saturation_goodput: float = Field(description="Goodput at saturation point")
+
+
+class InfraRecommendation(BaseModel):
+    """Infrastructure recommendation result."""
+
+    # Input information
+    model_name: str = Field(description="LLM model name")
+    workload: WorkloadSpec = Field(description="Workload specification")
+    current_infra: InfraProfile = Field(description="Current infrastructure profile")
+
+    # Recommendation
+    recommended_gpu: str = Field(description="Recommended GPU model")
+    recommended_count: int = Field(description="Recommended GPU count")
+    tensor_parallelism: int = Field(default=1, description="Recommended TP setting")
+
+    # Estimated performance
+    estimated_max_concurrency: int = Field(
+        description="Estimated max concurrency with recommended infra"
+    )
+    estimated_goodput: float = Field(description="Estimated goodput percentage")
+    estimated_throughput: float = Field(description="Estimated throughput (tokens/sec)")
+
+    # Calculation details
+    headroom_percent: float = Field(default=20.0, description="Headroom percentage")
+    calculation_formula: str = Field(description="Calculation formula explanation")
+    reasoning: str = Field(description="Detailed reasoning")
+
+    # Cost estimation (optional)
+    estimated_monthly_cost_usd: Optional[float] = Field(
+        default=None, description="Estimated monthly cloud cost (USD)"
+    )

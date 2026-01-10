@@ -80,6 +80,9 @@ LLM 서빙 서버의 성능을 정확히 측정하는 것은 생각보다 어렵
 | | 요청 ID 추적 | ✅ |
 | **어댑터** | OpenAI Compatible (vLLM, SGLang, Ollama) | ✅ |
 | | Triton Inference Server | 🚧 개발 중 |
+| **인프라 추천** | GPU 인프라 자동 추천 | ✅ |
+| | 워크로드 기반 스케일링 계산 | ✅ |
+| | SLO 기반 용량 산정 | ✅ |
 
 ---
 
@@ -125,6 +128,19 @@ llm-loadtest run \
   --server http://localhost:8000 \
   --model qwen3-14b \
   --output result.json
+```
+
+### 인프라 추천
+
+```bash
+# GPU 인프라 추천 (Phase 5)
+llm-loadtest recommend \
+  --server http://localhost:8000 \
+  --model qwen3-14b \
+  --peak-concurrency 500 \
+  --goodput-target 95
+
+# 출력 예시: "NVIDIA H100 × 5장 필요합니다"
 ```
 
 ### 시스템 정보 확인
@@ -306,6 +322,31 @@ Goodput: 87.0% (87/100 requests met SLO)
 2. **Error Rate & Goodput 차트**
    - 동시성별 에러율과 Goodput 비교
 
+### 인프라 추천 (/recommend)
+
+> **"이 서버가 동시 500명을 버티는가? 버티려면 H100 몇 장이 필요한가?"**
+
+#### 입력 폼
+
+- **서버 설정**: Server URL, Model Name
+- **워크로드 스펙**: Peak Concurrency (목표 동시 사용자)
+- **SLO 목표**: TTFT Target, TPOT Target, Goodput Target
+- **테스트 설정**: Concurrency Steps, Requests per Step, Headroom
+
+#### 결과 표시
+
+- **추천 결과 박스**: `NVIDIA H100 × 5장` 형태로 강조 표시
+- **현재 인프라 프로파일**: GPU 모델, 메모리, 최대 동시성, 처리량
+- **예상 성능**: 추천 인프라에서의 예상 Max Concurrency, Goodput, Throughput
+- **계산 근거**: 스케일링 공식 및 상세 reasoning
+- **차트**: 동시성별 Throughput/Goodput 시각화
+
+#### 알고리즘
+
+```
+필요 GPU 수 = ceil(목표 동시성 / SLO 만족 최대 동시성) × (1 + headroom)
+```
+
 ### 비교 (/compare)
 
 - 최대 **5개** 벤치마크 선택 비교
@@ -368,6 +409,67 @@ llm-loadtest run \
 | `--goodput` | string | - | SLO 임계값 |
 | `--output, -o` | path | - | 결과 파일 경로 |
 
+### llm-loadtest recommend
+
+GPU 인프라 추천:
+
+```bash
+llm-loadtest recommend \
+  --server http://localhost:8000 \    # 필수: 서버 URL
+  --model qwen3-14b \                  # 필수: 모델명
+  --peak-concurrency 500 \             # 필수: 목표 피크 동시성
+  --ttft-target 500 \                  # TTFT 목표 (ms)
+  --tpot-target 50 \                   # TPOT 목표 (ms)
+  --goodput-target 95 \                # Goodput 목표 (%)
+  --headroom 20 \                      # 안전 여유분 (%)
+  --concurrency-steps 1,10,50,100,200 \# 테스트할 동시성 레벨
+  --num-requests 50 \                  # 레벨당 요청 수
+  --output recommendation.json         # 결과 저장
+```
+
+#### 옵션 상세
+
+| 옵션 | 타입 | 기본값 | 설명 |
+|------|------|--------|------|
+| `--server, -s` | string | (필수) | 서버 URL |
+| `--model, -m` | string | (필수) | 모델명 |
+| `--peak-concurrency, -p` | int | (필수) | 목표 피크 동시 사용자 |
+| `--ttft-target` | float | 500 | TTFT 목표 (ms) |
+| `--tpot-target` | float | 50 | TPOT 목표 (ms) |
+| `--goodput-target` | float | 95 | Goodput 목표 (%) |
+| `--headroom` | float | 20 | 안전 여유분 (%) |
+| `--concurrency-steps` | string | "1,10,50,100,200" | 테스트할 동시성 레벨 |
+| `--num-requests, -n` | int | 50 | 레벨당 요청 수 |
+| `--output, -o` | path | - | 결과 파일 경로 |
+
+#### 출력 예시
+
+```
+╔═════════════════════════════════════════════════════════════╗
+║                     RECOMMENDATION                          ║
+╠═════════════════════════════════════════════════════════════╣
+║                                                             ║
+║   NVIDIA H100            x 5장                              ║
+║                                                             ║
+╚═════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────┐
+│ CURRENT INFRASTRUCTURE                                      │
+├─────────────────────────────────────────────────────────────┤
+│ GPU               : NVIDIA H100                             │
+│ Max Concurrency   : 120 (at 95.0% Goodput)                  │
+│ Throughput        : 1245.0 tokens/s                         │
+│ Saturation Point  : 150 concurrent                          │
+└─────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────┐
+│ CALCULATION                                                 │
+├─────────────────────────────────────────────────────────────┤
+│ Formula: ceil(500 / 120) × 1.2 = 5                          │
+│ Reasoning: 현재 H100 1장으로 최대 120명 동시 처리 가능...    │
+└─────────────────────────────────────────────────────────────┘
+```
+
 ### llm-loadtest info
 
 시스템 정보 출력:
@@ -407,6 +509,10 @@ GPU 상태 모니터링:
 | DELETE | `/api/v1/benchmark/run/{run_id}` | 결과 삭제 | 필요* |
 | WS | `/api/v1/benchmark/ws/run/{run_id}` | 실시간 진행률 | - |
 | GET | `/api/v1/benchmark/ws/stats` | WebSocket 통계 | - |
+| **POST** | `/api/v1/benchmark/recommend` | **인프라 추천 시작** | 필요* |
+| **GET** | `/api/v1/benchmark/recommend/{run_id}` | **추천 상태 조회** | - |
+| **GET** | `/api/v1/benchmark/recommend/{run_id}/result` | **추천 결과 조회** | - |
+| **DELETE** | `/api/v1/benchmark/recommend/{run_id}` | **추천 삭제** | 필요* |
 
 **\* 인증 필요**: `API_KEY` 환경변수 설정 시에만 활성화
 
@@ -453,6 +559,70 @@ GPU 상태 모니터링:
 
 **응답**: 파일 다운로드
 - Content-Type: `text/csv` 또는 `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
+
+### POST /api/v1/benchmark/recommend
+
+인프라 추천 시작
+
+**요청 본문**:
+```json
+{
+  "server_url": "http://localhost:8000",
+  "model": "qwen3-14b",
+  "adapter": "openai",
+  "workload": {
+    "peak_concurrency": 500,
+    "avg_input_tokens": 256,
+    "avg_output_tokens": 512,
+    "ttft_target_ms": 500,
+    "tpot_target_ms": 50,
+    "goodput_target_percent": 95
+  },
+  "headroom_percent": 20,
+  "test_config": {
+    "concurrency_steps": [1, 10, 50, 100, 200],
+    "num_requests_per_step": 50
+  }
+}
+```
+
+**응답**:
+```json
+{
+  "run_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "started"
+}
+```
+
+### GET /api/v1/benchmark/recommend/{run_id}/result
+
+추천 결과 조회
+
+**응답**:
+```json
+{
+  "run_id": "550e8400-e29b-41d4-a716-446655440000",
+  "recommendation": {
+    "model_name": "qwen3-14b",
+    "recommended_gpu": "NVIDIA H100",
+    "recommended_count": 5,
+    "tensor_parallelism": 1,
+    "estimated_max_concurrency": 600,
+    "estimated_goodput": 97.2,
+    "estimated_throughput": 6225.0,
+    "headroom_percent": 20,
+    "calculation_formula": "ceil(500 / 120) × 1.2 = 5",
+    "reasoning": "현재 H100 1장으로 최대 120명 동시 처리 가능..."
+  },
+  "current_infra": {
+    "gpu_model": "NVIDIA H100",
+    "gpu_count": 1,
+    "max_concurrency_at_slo": 120,
+    "throughput_tokens_per_sec": 1245.0
+  },
+  "test_results": [...]
+}
+```
 
 ---
 
@@ -678,7 +848,7 @@ docker compose build web
 
 ## 향후 개발 방향
 
-### Phase 5: 인프라 추천 기능 (진행 예정)
+### Phase 5: 인프라 추천 기능 ✅ 완료
 
 > **"이 서버가 동시 500명을 버티는가? 버티려면 H100 몇 장이 필요한가?"**
 
@@ -692,6 +862,12 @@ llm-loadtest recommend \
 # 출력: "NVIDIA H100 5장 필요합니다"
 ```
 
+**구현 완료 항목:**
+- [x] 워크로드 스펙 기반 추천 알고리즘
+- [x] CLI `recommend` 명령어
+- [x] API 엔드포인트 (`/api/v1/benchmark/recommend`)
+- [x] Web UI `/recommend` 페이지
+
 상세 PRD: [docs/prd-phase5-infra-recommend.md](docs/prd-phase5-infra-recommend.md)
 
 ### 단기 목표
@@ -699,7 +875,6 @@ llm-loadtest recommend \
 - [ ] Triton 어댑터 완성
 - [ ] Redis 캐싱 통합
 - [ ] Rate Limiting
-- [ ] **인프라 추천 기능** (Phase 5)
 
 ### 중기 목표
 

@@ -11,6 +11,7 @@ from llm_loadtest_api.logging_config import (
 )
 from llm_loadtest_api.routers.benchmarks import router as benchmarks_router
 from llm_loadtest_api.routers.websocket import router as websocket_router
+from llm_loadtest_api.routers.recommend import router as recommend_router
 
 # Configure structured logging
 configure_logging()
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     # Include routers
     app.include_router(benchmarks_router)
     app.include_router(websocket_router)
+    app.include_router(recommend_router)
 
     @app.get("/")
     async def root():
