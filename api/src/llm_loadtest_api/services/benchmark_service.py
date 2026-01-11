@@ -5,7 +5,7 @@ import sys
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # Add project root to path
 project_root = Path(__file__).parent.parent.parent.parent.parent
@@ -18,6 +18,7 @@ from adapters.openai_compat import OpenAICompatibleAdapter  # Register adapter
 
 from llm_loadtest_api.database import Database
 from llm_loadtest_api.models.schemas import BenchmarkRequest
+from llm_loadtest_api.routers.websocket import get_connection_manager
 
 
 class BenchmarkService:
@@ -85,6 +86,8 @@ class BenchmarkService:
             run_id: Unique run identifier.
             config: Benchmark configuration.
         """
+        manager = get_connection_manager()
+
         try:
             # Update status to running
             self.db.update_status(run_id, "running", started_at=datetime.now())
@@ -106,17 +109,60 @@ class BenchmarkService:
                     config.output_len // 4,
                 )
 
-            # Run load generator
+            # Run load generator with progress callback
             generator = LoadGenerator(adapter)
-            result = await generator.run(config)
+
+            # Setup progress tracking
+            concurrency_levels = list(config.concurrency)
+            total_levels = len(concurrency_levels)
+            state = {"level_index": 0, "current_level": concurrency_levels[0]}
+
+            def progress_callback(current: int, total: int, extra: Any) -> None:
+                """Callback to send progress updates via WebSocket."""
+                # extra가 "Concurrency: X" 형태면 새 레벨 시작
+                if isinstance(extra, str) and extra.startswith("Concurrency:"):
+                    try:
+                        level_value = int(extra.split(":")[1].strip())
+                        state["current_level"] = level_value
+                        if level_value in concurrency_levels:
+                            state["level_index"] = concurrency_levels.index(level_value)
+                    except (ValueError, IndexError):
+                        pass
+                    return  # 레벨 시작 알림은 별도로 WebSocket 전송하지 않음
+
+                # extra가 dict이면 실시간 메트릭
+                partial_metrics = None
+                if isinstance(extra, dict):
+                    partial_metrics = extra
+
+                # 진행 업데이트를 WebSocket으로 전송 (메트릭 포함)
+                asyncio.create_task(
+                    manager.send_progress(
+                        run_id=run_id,
+                        status="running",
+                        current=current,
+                        total=total,
+                        concurrency_level=state["current_level"],
+                        current_concurrency_index=state["level_index"],
+                        total_concurrency_levels=total_levels,
+                        metrics=partial_metrics,
+                    )
+                )
+
+            result = await generator.run(config, progress_callback)
 
             # Save result
             self.db.save_result(run_id, result.model_dump(mode="json"))
 
+            # Send completed message via WebSocket
+            await manager.send_completed(run_id, {"status": "completed"})
+
         except Exception as e:
             # Update status to failed
             self.db.update_status(run_id, "failed")
-            # Optionally log error
+            # Send failed message via WebSocket
+            await manager.send_failed(run_id, str(e))
+            # Log error
             print(f"[BenchmarkService] Run {run_id} failed: {e}")
 
         finally:

@@ -37,7 +37,7 @@ class ServerAdapter(Protocol):
         ...
 
 
-ProgressCallback = Callable[[int, int, Optional[str]], None]
+ProgressCallback = Callable[[int, int, Optional[str | dict]], None]
 
 
 class LoadGenerator:
@@ -63,6 +63,39 @@ class LoadGenerator:
         base_prompt = "Write a detailed explanation about the following topic: "
         filler = "artificial intelligence and machine learning " * (input_len // 5)
         return base_prompt + filler[: input_len * 4]
+
+    def _calculate_partial_metrics(
+        self,
+        results: list[RequestResult],
+        elapsed: float,
+        concurrency: int,
+    ) -> dict | None:
+        """Calculate partial metrics from in-progress results.
+
+        Args:
+            results: List of completed request results.
+            elapsed: Elapsed time in seconds.
+            concurrency: Current concurrency level.
+
+        Returns:
+            Dictionary with partial metrics or None if no successful results.
+        """
+        successful = [r for r in results if r.success]
+        if not successful:
+            return None
+
+        ttfts = [r.ttft_ms for r in successful if r.ttft_ms is not None]
+        total_tokens = sum(r.output_tokens for r in successful if r.output_tokens)
+
+        return {
+            "concurrency": concurrency,
+            "completed": len(results),
+            "success_count": len(successful),
+            "error_count": len(results) - len(successful),
+            "ttft_avg": sum(ttfts) / len(ttfts) if ttfts else 0,
+            "ttft_p50": sorted(ttfts)[len(ttfts) // 2] if ttfts else 0,
+            "throughput_current": total_tokens / elapsed if elapsed > 0 else 0,
+        }
 
     async def _run_concurrent_requests(
         self,
@@ -90,31 +123,44 @@ class LoadGenerator:
         semaphore = asyncio.Semaphore(concurrency)
         prompt = self._generate_prompt(input_len)
         completed = 0
+        last_metrics_at = 0
         lock = asyncio.Lock()
+        metrics_interval = max(10, num_requests // 20)  # 최소 10개, 또는 5%마다
+
+        start_time = time.perf_counter()
 
         async def send_request(request_id: int) -> RequestResult:
-            nonlocal completed
+            nonlocal completed, last_metrics_at
             async with semaphore:
                 result = await self.adapter.send_request(
                     request_id, prompt, output_len, stream
                 )
 
                 async with lock:
+                    results.append(result)  # 결과 즉시 저장
                     completed += 1
+
                     if progress_callback:
-                        progress_callback(completed, num_requests, None)
+                        # 매 N개 요청마다 실시간 메트릭 계산
+                        if completed - last_metrics_at >= metrics_interval:
+                            last_metrics_at = completed
+                            elapsed = time.perf_counter() - start_time
+                            partial_metrics = self._calculate_partial_metrics(
+                                results, elapsed, concurrency
+                            )
+                            progress_callback(completed, num_requests, partial_metrics)
+                        else:
+                            progress_callback(completed, num_requests, None)
 
                 return result
 
-        start_time = time.perf_counter()
-
         tasks = [send_request(i) for i in range(num_requests)]
-        results = await asyncio.gather(*tasks)
+        await asyncio.gather(*tasks)
 
         end_time = time.perf_counter()
         duration = end_time - start_time
 
-        return list(results), duration
+        return results, duration
 
     async def _run_duration_based(
         self,

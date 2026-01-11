@@ -2,11 +2,13 @@
 
 import csv
 import io
+import json
 from datetime import datetime
 from typing import Literal, Optional
 
-from fastapi import APIRouter, HTTPException, Depends
-from fastapi.responses import Response
+import httpx
+from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi.responses import Response, StreamingResponse
 
 from llm_loadtest_api.auth import APIKeyAuth
 from llm_loadtest_api.database import Database
@@ -467,3 +469,169 @@ def _export_to_xlsx(result: dict) -> bytes:
     wb.save(output)
     output.seek(0)
     return output.getvalue()
+
+
+@router.get("/result/{run_id}/analysis")
+async def analyze_result(
+    run_id: str,
+    server_url: str = Query(default="http://host.docker.internal:8000", description="vLLM server URL"),
+    model: str = Query(default="", description="Model name (uses benchmark model if empty)"),
+    service: BenchmarkService = Depends(get_service),
+) -> StreamingResponse:
+    """Generate AI analysis of benchmark results using vLLM.
+
+    Streams the analysis response in real-time using Server-Sent Events (SSE).
+
+    Args:
+        run_id: The benchmark run ID.
+        server_url: vLLM server URL for analysis generation.
+        model: Model to use for analysis (defaults to benchmark's model).
+
+    Returns:
+        StreamingResponse with SSE format.
+    """
+    result = service.get_result(run_id)
+    if not result:
+        run = service.get_status(run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+        if run["status"] == "running":
+            raise HTTPException(status_code=202, detail="Benchmark still running")
+        if run["status"] == "failed":
+            raise HTTPException(status_code=500, detail="Benchmark failed")
+        raise HTTPException(status_code=404, detail="Result not found")
+
+    # Use model from result if not specified
+    analysis_model = model if model else result.get("model", "qwen3-14b")
+
+    # Build analysis prompt
+    prompt = _build_analysis_prompt(result)
+
+    async def generate_analysis():
+        """Stream analysis from vLLM."""
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, read=300.0)) as client:
+                async with client.stream(
+                    "POST",
+                    f"{server_url}/v1/chat/completions",
+                    json={
+                        "model": analysis_model,
+                        "messages": [
+                            {
+                                "role": "system",
+                                "content": "당신은 LLM 서버 성능 분석 전문가입니다. 벤치마크 결과를 분석하여 마크다운 형식의 보고서를 작성합니다. 한국어로 답변하세요."
+                            },
+                            {
+                                "role": "user",
+                                "content": prompt
+                            }
+                        ],
+                        "stream": True,
+                        "max_tokens": 8192,
+                        "temperature": 0.3,
+                    },
+                    headers={"Content-Type": "application/json"},
+                ) as response:
+                    if response.status_code != 200:
+                        error_text = await response.aread()
+                        yield f"data: {json.dumps({'error': f'vLLM error: {error_text.decode()}'})}\n\n"
+                        return
+
+                    # Thinking 모델 대응: 실제 보고서 시작 전까지 버퍼링
+                    buffer = ""
+                    report_started = False
+
+                    async for line in response.aiter_lines():
+                        if line.startswith("data: "):
+                            data = line[6:]
+                            if data == "[DONE]":
+                                # 버퍼에 남은 내용이 있으면 출력
+                                if buffer and not report_started:
+                                    yield f"data: {json.dumps({'content': buffer})}\n\n"
+                                yield "data: [DONE]\n\n"
+                                break
+                            try:
+                                chunk = json.loads(data)
+                                content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                if content:
+                                    if report_started:
+                                        # 보고서 시작된 후에는 바로 출력
+                                        yield f"data: {json.dumps({'content': content})}\n\n"
+                                    else:
+                                        # 버퍼에 축적
+                                        buffer += content
+                                        # 마크다운 헤딩이 나오면 보고서 시작
+                                        if "\n#" in buffer or buffer.startswith("#"):
+                                            # # 이전의 thinking 부분 제거
+                                            idx = buffer.find("\n#")
+                                            if idx != -1:
+                                                buffer = buffer[idx + 1:]  # \n 제거하고 # 부터
+                                            report_started = True
+                                            yield f"data: {json.dumps({'content': buffer})}\n\n"
+                                            buffer = ""
+                            except json.JSONDecodeError:
+                                continue
+        except httpx.ConnectError:
+            yield f"data: {json.dumps({'error': f'vLLM 서버에 연결할 수 없습니다: {server_url}'})}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+
+    return StreamingResponse(
+        generate_analysis(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+def _build_analysis_prompt(result: dict) -> str:
+    """Build analysis prompt from benchmark result."""
+    model = result.get("model", "Unknown")
+    server_url = result.get("server_url", "Unknown")
+    duration = result.get("duration_seconds", 0)
+    results = result.get("results", [])
+    summary = result.get("summary", {})
+
+    # Build concurrency results table
+    results_table = "| Concurrency | Throughput (tok/s) | TTFT p50 (ms) | TTFT p99 (ms) | Error Rate (%) | Goodput (%) |\n"
+    results_table += "|-------------|-------------------|---------------|---------------|----------------|-------------|\n"
+
+    for r in results:
+        ttft = r.get("ttft") or {}
+        goodput = r.get("goodput") or {}
+        goodput_str = f"{goodput.get('goodput_percent', 0):.1f}" if goodput else "N/A"
+        results_table += f"| {r.get('concurrency', 0)} | {r.get('throughput_tokens_per_sec', 0):.1f} | {ttft.get('p50', 0):.1f} | {ttft.get('p99', 0):.1f} | {r.get('error_rate_percent', 0):.2f} | {goodput_str} |\n"
+
+    prompt = f"""다음 LLM 서버 벤치마크 결과를 분석해주세요.
+
+## 테스트 환경
+- **모델**: {model}
+- **서버**: {server_url}
+- **테스트 시간**: {duration:.1f}초
+
+## 결과 요약
+- **최고 처리량**: {summary.get('best_throughput', 0):.1f} tok/s
+- **최저 TTFT (p50)**: {summary.get('best_ttft_p50', 0):.1f} ms
+- **최적 동시성**: {summary.get('best_concurrency', 'N/A')}
+- **전체 에러율**: {summary.get('overall_error_rate', 0):.2f}%
+- **평균 Goodput**: {summary.get('avg_goodput_percent', 'N/A')}%
+
+## Concurrency별 상세 결과
+{results_table}
+
+## 분석 요청
+위 벤치마크 결과를 바탕으로 다음 항목들을 분석해주세요:
+
+1. **성능 개요**: 전반적인 서버 성능 평가
+2. **Concurrency 영향 분석**: 동시성 증가에 따른 성능 변화 패턴
+3. **병목 지점 식별**: 성능이 저하되기 시작하는 동시성 레벨과 원인 추정
+4. **TTFT vs Throughput 트레이드오프**: 응답 시간과 처리량 간의 관계 분석
+5. **권장 운영 동시성**: 실제 서비스에서 권장하는 최적 동시성 레벨
+6. **개선 제안**: 성능 향상을 위한 구체적인 제안
+
+각 항목을 **마크다운 형식**으로 작성해주세요."""
+
+    return prompt

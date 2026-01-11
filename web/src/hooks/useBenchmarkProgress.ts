@@ -14,6 +14,16 @@ export interface ConcurrencyData {
   total: number;
 }
 
+export interface PartialMetrics {
+  concurrency: number;
+  completed: number;
+  success_count: number;
+  error_count: number;
+  ttft_avg: number;
+  ttft_p50: number;
+  throughput_current: number;
+}
+
 export interface BenchmarkProgress {
   type: "progress" | "completed" | "failed";
   run_id: string;
@@ -21,7 +31,7 @@ export interface BenchmarkProgress {
   progress?: ProgressData;
   concurrency?: ConcurrencyData;
   overall_percent?: number;
-  metrics?: Record<string, unknown>;
+  metrics?: PartialMetrics | null;
   summary?: Record<string, unknown>;
   error?: string;
 }

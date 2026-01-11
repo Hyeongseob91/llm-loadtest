@@ -1,11 +1,13 @@
 "use client";
 
 import { useParams } from "next/navigation";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
+import { useState, useEffect, useMemo } from "react";
 import { api, ConcurrencyResult } from "@/lib/api";
 import { MetricCard } from "@/components/metric-card";
 import { useBenchmarkProgress } from "@/hooks/useBenchmarkProgress";
-import { Gauge, Clock, Activity, AlertCircle, CheckCircle, Loader2 } from "lucide-react";
+import { Gauge, Clock, Activity, AlertCircle, CheckCircle, Loader2, FileText } from "lucide-react";
 import {
   LineChart,
   Line,
@@ -43,17 +45,68 @@ export default function BenchmarkResultPage() {
 
   const isRunning = status?.status === "running";
   const startedAt = status?.started_at ? new Date(status.started_at) : null;
-  const elapsed = startedAt ? Math.floor((Date.now() - startedAt.getTime()) / 1000) : 0;
 
-  // 차트 데이터 생성
-  const chartData = result?.results?.map((r: ConcurrencyResult) => ({
-    concurrency: r.concurrency,
-    throughput: r.throughput_tokens_per_sec,
-    ttft_p50: r.ttft.p50,
-    ttft_p99: r.ttft.p99,
-    error_rate: r.error_rate_percent,
-    goodput: r.goodput?.goodput_percent ?? null,
-  })) ?? [];
+  // 경과시간을 매초 업데이트
+  const [elapsed, setElapsed] = useState(0);
+
+  useEffect(() => {
+    if (!isRunning || !startedAt) {
+      setElapsed(0);
+      return;
+    }
+
+    // 초기값 설정
+    setElapsed(Math.floor((Date.now() - startedAt.getTime()) / 1000));
+
+    // 매초 업데이트
+    const interval = setInterval(() => {
+      setElapsed(Math.floor((Date.now() - startedAt.getTime()) / 1000));
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isRunning, startedAt]);
+
+  // 완료된 레벨 데이터 (API 결과)
+  const completedChartData = useMemo(() => {
+    return result?.results?.map((r: ConcurrencyResult) => ({
+      concurrency: r.concurrency,
+      throughput: r.throughput_tokens_per_sec,
+      ttft_p50: r.ttft.p50,
+      ttft_p99: r.ttft.p99,
+      error_rate: r.error_rate_percent,
+      goodput: r.goodput?.goodput_percent ?? null,
+      isLive: false,
+    })) ?? [];
+  }, [result]);
+
+  // 진행 중인 레벨의 실시간 메트릭
+  const liveChartData = useMemo(() => {
+    if (!isRunning || !progress?.metrics) return null;
+    const m = progress.metrics;
+    // 이미 완료된 레벨과 중복 방지
+    const alreadyCompleted = completedChartData.some(
+      (d) => d.concurrency === m.concurrency
+    );
+    if (alreadyCompleted) return null;
+
+    return {
+      concurrency: m.concurrency,
+      throughput: m.throughput_current,
+      ttft_p50: m.ttft_p50,
+      ttft_p99: m.ttft_p50 * 1.5, // 진행 중이므로 p99는 추정값
+      error_rate: m.error_count > 0 ? (m.error_count / m.completed) * 100 : 0,
+      goodput: null,
+      isLive: true, // 진행 중 표시
+    };
+  }, [isRunning, progress, completedChartData]);
+
+  // 완료된 레벨 + 진행 중 레벨 병합
+  const chartData = useMemo(() => {
+    if (liveChartData) {
+      return [...completedChartData, liveChartData];
+    }
+    return completedChartData;
+  }, [completedChartData, liveChartData]);
 
   // Error state
   if (status?.status === "failed") {
@@ -287,9 +340,14 @@ export default function BenchmarkResultPage() {
                     color: "white",
                     fontSize: 12,
                   }}
-                  formatter={(value: number, name: string) => {
-                    if (name.includes("Throughput")) return [`${value.toFixed(1)} tok/s`, name];
-                    return [`${value.toFixed(1)} ms`, name];
+                  formatter={(value: number, name: string, props: { payload?: { isLive?: boolean } }) => {
+                    const suffix = props.payload?.isLive ? " (진행 중)" : "";
+                    if (name.includes("Throughput")) return [`${value.toFixed(1)} tok/s${suffix}`, name];
+                    return [`${value.toFixed(1)} ms${suffix}`, name];
+                  }}
+                  labelFormatter={(label, payload) => {
+                    const isLive = payload?.[0]?.payload?.isLive;
+                    return `Concurrency: ${label}${isLive ? " (실시간)" : ""}`;
                   }}
                 />
                 <Legend
@@ -303,7 +361,14 @@ export default function BenchmarkResultPage() {
                   stroke="#2563eb"
                   name="Throughput"
                   strokeWidth={2}
-                  dot={{ r: 5 }}
+                  dot={(props: { cx: number; cy: number; payload?: { isLive?: boolean } }) => {
+                    const { cx, cy, payload } = props;
+                    // 진행 중: 빈 원 (테두리만), 완료: 채워진 원
+                    if (payload?.isLive) {
+                      return <circle cx={cx} cy={cy} r={5} fill="white" stroke="#2563eb" strokeWidth={2} />;
+                    }
+                    return <circle cx={cx} cy={cy} r={5} fill="#2563eb" />;
+                  }}
                   activeDot={{ r: 7 }}
                 />
                 <Line
@@ -313,7 +378,13 @@ export default function BenchmarkResultPage() {
                   stroke="#10b981"
                   name="TTFT p50"
                   strokeWidth={2}
-                  dot={{ r: 5 }}
+                  dot={(props: { cx: number; cy: number; payload?: { isLive?: boolean } }) => {
+                    const { cx, cy, payload } = props;
+                    if (payload?.isLive) {
+                      return <circle cx={cx} cy={cy} r={5} fill="white" stroke="#10b981" strokeWidth={2} />;
+                    }
+                    return <circle cx={cx} cy={cy} r={5} fill="#10b981" />;
+                  }}
                   activeDot={{ r: 7 }}
                 />
                 <Line
@@ -323,7 +394,13 @@ export default function BenchmarkResultPage() {
                   stroke="#f59e0b"
                   name="TTFT p99"
                   strokeWidth={2}
-                  dot={{ r: 5 }}
+                  dot={(props: { cx: number; cy: number; payload?: { isLive?: boolean } }) => {
+                    const { cx, cy, payload } = props;
+                    if (payload?.isLive) {
+                      return <circle cx={cx} cy={cy} r={5} fill="white" stroke="#f59e0b" strokeWidth={2} />;
+                    }
+                    return <circle cx={cx} cy={cy} r={5} fill="#f59e0b" />;
+                  }}
                   activeDot={{ r: 7 }}
                 />
               </LineChart>
@@ -360,11 +437,22 @@ export default function BenchmarkResultPage() {
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
             상세 결과
           </h2>
-          {isRunning && (
-            <span className="text-xs text-gray-500 dark:text-gray-400">
-              {result?.results?.length ?? 0}개 레벨 완료
-            </span>
-          )}
+          <div className="flex items-center gap-3">
+            {isRunning && (
+              <span className="text-xs text-gray-500 dark:text-gray-400">
+                {result?.results?.length ?? 0}개 레벨 완료
+              </span>
+            )}
+            {!isRunning && result?.results && result.results.length > 0 && (
+              <Link
+                href={`/benchmark/${runId}/analysis`}
+                className="flex items-center gap-1.5 text-sm text-blue-600 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 font-medium"
+              >
+                <FileText className="h-4 w-4" />
+                AI 분석 보고서 →
+              </Link>
+            )}
+          </div>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full">
