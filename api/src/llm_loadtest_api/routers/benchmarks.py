@@ -509,6 +509,17 @@ async def analyze_result(
 
     async def generate_analysis():
         """Stream analysis from vLLM."""
+        # System prompt: /no_think로 thinking 모드 비활성화 시도
+        # Qwen3 VL 모델은 </think> 태그로 thinking 종료
+        system_prompt = """/no_think
+당신은 LLM 서버 성능 분석 전문가입니다. 벤치마크 결과를 분석하여 마크다운 형식의 보고서를 작성합니다.
+
+[답변 원칙]
+- 한국어로 답변
+- 전문 용어는 괄호 안에 간단한 설명 추가 (예: TTFT(첫 토큰 응답 시간))
+- 구조화된 마크다운 형식 사용
+- 핵심부터 설명, 불필요한 서론 생략"""
+
         try:
             async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, read=300.0)) as client:
                 async with client.stream(
@@ -519,7 +530,7 @@ async def analyze_result(
                         "messages": [
                             {
                                 "role": "system",
-                                "content": "당신은 LLM 서버 성능 분석 전문가입니다. 벤치마크 결과를 분석하여 마크다운 형식의 보고서를 작성합니다. 한국어로 답변하세요."
+                                "content": system_prompt
                             },
                             {
                                 "role": "user",
@@ -537,15 +548,17 @@ async def analyze_result(
                         yield f"data: {json.dumps({'error': f'vLLM error: {error_text.decode()}'})}\n\n"
                         return
 
-                    # Thinking 모델 대응: 실제 보고서 시작 전까지 버퍼링
+                    # Thinking 모델 대응: </think> 태그가 나오면 그 이후만 출력
+                    # Qwen3-VL 특성: <think> 시작 없이 thinking 시작, </think>로 종료
                     buffer = ""
                     report_started = False
+                    think_end_tag = "</think>"
 
                     async for line in response.aiter_lines():
                         if line.startswith("data: "):
                             data = line[6:]
                             if data == "[DONE]":
-                                # 버퍼에 남은 내용이 있으면 출력
+                                # 버퍼에 남은 내용이 있으면 출력 (thinking이 없었던 경우)
                                 if buffer and not report_started:
                                     yield f"data: {json.dumps({'content': buffer})}\n\n"
                                 yield "data: [DONE]\n\n"
@@ -560,14 +573,20 @@ async def analyze_result(
                                     else:
                                         # 버퍼에 축적
                                         buffer += content
-                                        # 마크다운 헤딩이 나오면 보고서 시작
-                                        if "\n#" in buffer or buffer.startswith("#"):
-                                            # # 이전의 thinking 부분 제거
-                                            idx = buffer.find("\n#")
-                                            if idx != -1:
-                                                buffer = buffer[idx + 1:]  # \n 제거하고 # 부터
+                                        # </think> 태그가 나오면 보고서 시작
+                                        if think_end_tag in buffer:
+                                            # </think> 이후 내용만 추출
+                                            idx = buffer.find(think_end_tag)
+                                            remaining = buffer[idx + len(think_end_tag):].lstrip()
                                             report_started = True
-                                            yield f"data: {json.dumps({'content': buffer})}\n\n"
+                                            if remaining:
+                                                yield f"data: {json.dumps({'content': remaining})}\n\n"
+                                            buffer = ""
+                                        # /no_think이 작동하면 바로 마크다운으로 시작할 수 있음
+                                        elif buffer.lstrip().startswith("#") and len(buffer) > 50:
+                                            # thinking 없이 바로 보고서 시작
+                                            report_started = True
+                                            yield f"data: {json.dumps({'content': buffer.lstrip()})}\n\n"
                                             buffer = ""
                             except json.JSONDecodeError:
                                 continue
@@ -593,7 +612,38 @@ def _build_analysis_prompt(result: dict) -> str:
     server_url = result.get("server_url", "Unknown")
     duration = result.get("duration_seconds", 0)
     results = result.get("results", [])
-    summary = result.get("summary", {})
+
+    # 테이블 데이터에서 직접 요약 통계 계산 (summary 필드가 없거나 0인 경우 대비)
+    best_throughput = 0.0
+    best_ttft_p50 = float('inf')
+    best_concurrency = None
+    total_errors = 0
+    total_requests = 0
+    goodput_values = []
+
+    for r in results:
+        throughput = r.get('throughput_tokens_per_sec', 0) or 0
+        if throughput > best_throughput:
+            best_throughput = throughput
+            best_concurrency = r.get('concurrency', 0)
+
+        ttft = r.get("ttft") or {}
+        ttft_p50 = ttft.get('p50', 0) or 0
+        if ttft_p50 > 0 and ttft_p50 < best_ttft_p50:
+            best_ttft_p50 = ttft_p50
+
+        total_requests += r.get('total_requests', 0) or 0
+        total_errors += r.get('error_count', 0) or 0
+
+        goodput = r.get("goodput") or {}
+        if goodput and 'goodput_percent' in goodput:
+            goodput_values.append(goodput['goodput_percent'])
+
+    # 계산된 값으로 요약
+    overall_error_rate = (total_errors / total_requests * 100) if total_requests > 0 else 0
+    avg_goodput = sum(goodput_values) / len(goodput_values) if goodput_values else None
+    if best_ttft_p50 == float('inf'):
+        best_ttft_p50 = 0
 
     # Build concurrency results table
     results_table = "| Concurrency | Throughput (tok/s) | TTFT p50 (ms) | TTFT p99 (ms) | Error Rate (%) | Goodput (%) |\n"
@@ -605,6 +655,10 @@ def _build_analysis_prompt(result: dict) -> str:
         goodput_str = f"{goodput.get('goodput_percent', 0):.1f}" if goodput else "N/A"
         results_table += f"| {r.get('concurrency', 0)} | {r.get('throughput_tokens_per_sec', 0):.1f} | {ttft.get('p50', 0):.1f} | {ttft.get('p99', 0):.1f} | {r.get('error_rate_percent', 0):.2f} | {goodput_str} |\n"
 
+    # 요약 문자열 생성
+    goodput_summary = f"{avg_goodput:.1f}%" if avg_goodput is not None else "N/A"
+    concurrency_summary = best_concurrency if best_concurrency else "N/A"
+
     prompt = f"""다음 LLM 서버 벤치마크 결과를 분석해주세요.
 
 ## 테스트 환경
@@ -612,26 +666,44 @@ def _build_analysis_prompt(result: dict) -> str:
 - **서버**: {server_url}
 - **테스트 시간**: {duration:.1f}초
 
-## 결과 요약
-- **최고 처리량**: {summary.get('best_throughput', 0):.1f} tok/s
-- **최저 TTFT (p50)**: {summary.get('best_ttft_p50', 0):.1f} ms
-- **최적 동시성**: {summary.get('best_concurrency', 'N/A')}
-- **전체 에러율**: {summary.get('overall_error_rate', 0):.2f}%
-- **평균 Goodput**: {summary.get('avg_goodput_percent', 'N/A')}%
+## 성능 요약 (테이블 기반 계산)
+- **최고 처리량**: {best_throughput:.1f} tok/s (동시성 {concurrency_summary}에서)
+- **최저 TTFT p50**: {best_ttft_p50:.1f} ms
+- **전체 에러율**: {overall_error_rate:.2f}%
+- **평균 Goodput**: {goodput_summary}
 
 ## Concurrency별 상세 결과
 {results_table}
 
 ## 분석 요청
-위 벤치마크 결과를 바탕으로 다음 항목들을 분석해주세요:
+위 벤치마크 결과를 분석하여 **전문가 보고서**를 작성해주세요.
 
-1. **성능 개요**: 전반적인 서버 성능 평가
-2. **Concurrency 영향 분석**: 동시성 증가에 따른 성능 변화 패턴
-3. **병목 지점 식별**: 성능이 저하되기 시작하는 동시성 레벨과 원인 추정
-4. **TTFT vs Throughput 트레이드오프**: 응답 시간과 처리량 간의 관계 분석
-5. **권장 운영 동시성**: 실제 서비스에서 권장하는 최적 동시성 레벨
-6. **개선 제안**: 성능 향상을 위한 구체적인 제안
+**[용어 설명 규칙]**
+- 전문 용어는 처음 사용 시 괄호 안에 간단한 설명 추가
+- 예: "TTFT(첫 토큰 응답 시간, Time To First Token)"
+- 예: "Throughput(처리량, 초당 처리 토큰 수)"
+- 예: "Goodput(유효 처리량, SLA 기준을 충족하는 요청 비율)"
 
-각 항목을 **마크다운 형식**으로 작성해주세요."""
+**[분석 항목]**
+
+# 1. 성능 개요
+전반적인 서버 성능을 요약하세요.
+
+# 2. Concurrency 영향 분석
+동시성(동시 요청 수) 증가에 따른 성능 변화 패턴을 분석하세요. 표 데이터를 기반으로 구체적인 수치를 인용하세요.
+
+# 3. 병목 지점 식별
+성능이 저하되기 시작하는 동시성 레벨과 그 원인을 추정하세요.
+
+# 4. TTFT vs Throughput 트레이드오프
+응답 시간과 처리량 간의 관계를 분석하세요. 낮은 지연시간과 높은 처리량 사이의 균형점을 찾으세요.
+
+# 5. 권장 운영 동시성
+실제 서비스에서 권장하는 최적 동시성 레벨과 그 이유를 제시하세요.
+
+# 6. 개선 제안
+성능 향상을 위한 구체적인 제안을 해주세요. 인프라, 모델, 설정 측면에서 실행 가능한 조치를 포함하세요.
+
+각 항목을 **마크다운 헤딩(#)으로 구분**하여 작성해주세요."""
 
     return prompt
