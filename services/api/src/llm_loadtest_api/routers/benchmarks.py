@@ -511,6 +511,14 @@ async def analyze_result(
             raise HTTPException(status_code=500, detail="Benchmark failed")
         raise HTTPException(status_code=404, detail="Result not found")
 
+    # Check framework - AI analysis only supports vLLM
+    framework = result.get("framework", "vllm")
+    if framework and framework != "vllm":
+        raise HTTPException(
+            status_code=400,
+            detail=f"AI 분석 도구는 현재 vLLM 프레임워크만 지원이 가능합니다. (현재: {framework})"
+        )
+
     # Use model from result if not specified
     analysis_model = model if model else result.get("model", "qwen3-14b")
 

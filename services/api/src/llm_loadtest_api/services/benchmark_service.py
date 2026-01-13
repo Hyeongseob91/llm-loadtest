@@ -77,6 +77,11 @@ class BenchmarkService:
             if not vllm_config:
                 vllm_config = None
 
+        # Extract validation config (optional)
+        validation_config = None
+        if request.validation_config and request.validation_config.enabled:
+            validation_config = request.validation_config.model_dump()
+
         # Save to database
         self.db.create_run(
             run_id=run_id,
@@ -87,7 +92,9 @@ class BenchmarkService:
         )
 
         # Start background task
-        task = asyncio.create_task(self._run_benchmark(run_id, config, vllm_config))
+        task = asyncio.create_task(
+            self._run_benchmark(run_id, config, vllm_config, validation_config)
+        )
         self._running_tasks[run_id] = task
 
         return run_id
@@ -97,6 +104,7 @@ class BenchmarkService:
         run_id: str,
         config: BenchmarkConfig,
         vllm_config: Optional[dict] = None,
+        validation_config: Optional[dict] = None,
     ) -> None:
         """Run benchmark in background.
 
@@ -104,6 +112,7 @@ class BenchmarkService:
             run_id: Unique run identifier.
             config: Benchmark configuration.
             vllm_config: User-provided vLLM configuration (optional).
+            validation_config: Validation configuration (optional).
         """
         manager = get_connection_manager()
         gpu_monitor: Optional[GPUMonitor] = None
@@ -158,12 +167,19 @@ class BenchmarkService:
                         pass
                     return  # 레벨 시작 알림은 별도로 WebSocket 전송하지 않음
 
-                # extra가 dict이면 실시간 메트릭
+                # extra에서 메트릭과 요청 로그 추출
                 partial_metrics = None
+                request_log = None
                 if isinstance(extra, dict):
-                    partial_metrics = extra
+                    # 새 형식: {"metrics": {...}, "request_log": {...}}
+                    if "metrics" in extra or "request_log" in extra:
+                        partial_metrics = extra.get("metrics")
+                        request_log = extra.get("request_log")
+                    else:
+                        # 이전 형식 호환: extra 자체가 메트릭
+                        partial_metrics = extra
 
-                # 진행 업데이트를 WebSocket으로 전송 (메트릭 포함)
+                # 진행 업데이트를 WebSocket으로 전송 (메트릭 + 요청 로그 포함)
                 asyncio.create_task(
                     manager.send_progress(
                         run_id=run_id,
@@ -174,10 +190,35 @@ class BenchmarkService:
                         current_concurrency_index=state["level_index"],
                         total_concurrency_levels=total_levels,
                         metrics=partial_metrics,
+                        request_log=request_log,
                     )
                 )
 
-            result = await generator.run(config, progress_callback)
+            # Run with or without validation
+            enable_validation = validation_config is not None
+            docker_enabled = validation_config.get("docker_enabled", True) if validation_config else True
+            container_name = validation_config.get("container_name") if validation_config else None
+
+            # Setup validation progress callback
+            def validation_progress_callback(step: str, message: str, status: str) -> None:
+                """Callback to send validation progress logs via WebSocket."""
+                asyncio.create_task(
+                    manager.send_validation_log(
+                        run_id=run_id,
+                        step=step,
+                        message=message,
+                        status=status,
+                    )
+                )
+
+            result = await generator.run(
+                config,
+                progress_callback,
+                enable_validation=enable_validation,
+                docker_enabled=docker_enabled,
+                container_name=container_name,
+                validation_progress_callback=validation_progress_callback if enable_validation else None,
+            )
 
             # Stop GPU monitoring and collect metrics
             if gpu_monitoring_active and gpu_monitor:

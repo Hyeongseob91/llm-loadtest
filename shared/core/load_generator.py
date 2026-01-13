@@ -1,6 +1,7 @@
 """Asyncio-based load generator for LLM servers."""
 
 import asyncio
+import logging
 import time
 import uuid
 from datetime import datetime
@@ -12,7 +13,11 @@ from shared.core.models import (
     BenchmarkResult,
     ConcurrencyResult,
     RequestResult,
+    ValidationResult,
 )
+from shared.core.validator import MetricsValidator, format_validation_result
+
+logger = logging.getLogger(__name__)
 
 
 class ServerAdapter(Protocol):
@@ -85,6 +90,7 @@ class LoadGenerator:
             return None
 
         ttfts = [r.ttft_ms for r in successful if r.ttft_ms is not None]
+        e2es = [r.e2e_latency_ms for r in successful if r.e2e_latency_ms is not None]
         total_tokens = sum(r.output_tokens for r in successful if r.output_tokens)
 
         return {
@@ -94,6 +100,7 @@ class LoadGenerator:
             "error_count": len(results) - len(successful),
             "ttft_avg": sum(ttfts) / len(ttfts) if ttfts else 0,
             "ttft_p50": sorted(ttfts)[len(ttfts) // 2] if ttfts else 0,
+            "e2e_avg": sum(e2es) / len(e2es) if e2es else 0,
             "throughput_current": total_tokens / elapsed if elapsed > 0 else 0,
             "timestamp": time.time(),  # Unix timestamp for time-series charts
         }
@@ -142,6 +149,18 @@ class LoadGenerator:
                     completed += 1
 
                     if progress_callback:
+                        # 요청별 로그 정보 생성
+                        request_log = {
+                            "request_id": request_id,
+                            "status": "completed" if result.success else "failed",
+                            "ttft_ms": result.ttft_ms,
+                            "e2e_ms": result.e2e_latency_ms,
+                            "output_tokens": result.output_tokens,
+                            "success": result.success,
+                            "error_type": result.error_type,
+                            "timestamp": time.time(),
+                        }
+
                         # 매 N개 요청마다 실시간 메트릭 계산
                         if completed - last_metrics_at >= metrics_interval:
                             last_metrics_at = completed
@@ -149,9 +168,19 @@ class LoadGenerator:
                             partial_metrics = self._calculate_partial_metrics(
                                 results, elapsed, concurrency
                             )
-                            progress_callback(completed, num_requests, partial_metrics)
+                            # 메트릭과 요청 로그 함께 전달
+                            progress_callback(
+                                completed,
+                                num_requests,
+                                {"metrics": partial_metrics, "request_log": request_log},
+                            )
                         else:
-                            progress_callback(completed, num_requests, None)
+                            # 요청 로그만 전달
+                            progress_callback(
+                                completed,
+                                num_requests,
+                                {"request_log": request_log},
+                            )
 
                 return result
 
@@ -224,18 +253,39 @@ class LoadGenerator:
         self,
         config: BenchmarkConfig,
         progress_callback: Optional[ProgressCallback] = None,
+        enable_validation: bool = False,
+        docker_enabled: bool = True,
+        container_name: Optional[str] = None,
+        validation_progress_callback: Optional[callable] = None,
     ) -> BenchmarkResult:
         """Run the load test.
 
         Args:
             config: Benchmark configuration.
             progress_callback: Optional callback for progress updates.
+            enable_validation: Enable cross-validation against server metrics.
+            docker_enabled: Enable Docker log validation (False = Prometheus only).
+            container_name: Docker container name for log validation (auto-detected if None).
+            validation_progress_callback: Optional callback for validation progress logs.
 
         Returns:
             BenchmarkResult with all metrics.
         """
         run_id = str(uuid.uuid4())
         started_at = datetime.now()
+
+        # Initialize validator if enabled
+        validator: Optional[MetricsValidator] = None
+        if enable_validation:
+            validator = MetricsValidator(
+                server_url=config.server_url,
+                docker_enabled=docker_enabled,
+                container_name=container_name,
+                progress_callback=validation_progress_callback,
+            )
+            await validator.initialize()
+            await validator.collect_before()
+            logger.info("Validation enabled: collecting server metrics before benchmark")
 
         concurrency_results: list[ConcurrencyResult] = []
 
@@ -275,6 +325,36 @@ class LoadGenerator:
         completed_at = datetime.now()
         total_duration = (completed_at - started_at).total_seconds()
 
+        # Run validation if enabled
+        validation_result: Optional[ValidationResult] = None
+        if validator:
+            await validator.collect_after()
+
+            # Calculate aggregate metrics for validation
+            total_requests = sum(r.total_requests for r in concurrency_results)
+            successful_requests = sum(r.successful_requests for r in concurrency_results)
+            total_output_tokens = sum(r.total_output_tokens for r in concurrency_results)
+
+            # Weighted average TTFT
+            ttft_values = [r.ttft.mean * r.successful_requests for r in concurrency_results]
+            avg_ttft_ms = sum(ttft_values) / successful_requests if successful_requests > 0 else 0
+
+            # Average throughput
+            avg_throughput = sum(r.throughput_tokens_per_sec for r in concurrency_results) / len(
+                concurrency_results
+            ) if concurrency_results else 0
+
+            validation_result = await validator.validate(
+                client_total_requests=total_requests,
+                client_successful_requests=successful_requests,
+                client_avg_ttft_ms=avg_ttft_ms,
+                client_total_output_tokens=total_output_tokens,
+                client_throughput=avg_throughput,
+            )
+
+            # Log validation result
+            logger.info(format_validation_result(validation_result))
+
         return BenchmarkResult(
             run_id=run_id,
             server_url=config.server_url,
@@ -285,4 +365,5 @@ class LoadGenerator:
             started_at=started_at,
             completed_at=completed_at,
             duration_seconds=total_duration,
+            validation=validation_result,
         )

@@ -74,6 +74,7 @@ class ConnectionManager:
         current_concurrency_index: int,
         total_concurrency_levels: int,
         metrics: Optional[dict] = None,
+        request_log: Optional[dict] = None,
     ) -> None:
         """Send progress update to all subscribers.
 
@@ -86,6 +87,7 @@ class ConnectionManager:
             current_concurrency_index: Index of current concurrency level (0-based).
             total_concurrency_levels: Total number of concurrency levels.
             metrics: Optional current metrics snapshot.
+            request_log: Optional individual request log entry.
         """
         message = {
             "type": "progress",
@@ -115,6 +117,9 @@ class ConnectionManager:
 
         if metrics:
             message["metrics"] = metrics
+
+        if request_log:
+            message["request_log"] = request_log
 
         await self.broadcast(run_id, message)
 
@@ -157,6 +162,35 @@ class ConnectionManager:
                 "run_id": run_id,
                 "status": "failed",
                 "error": error,
+            },
+        )
+
+    async def send_validation_log(
+        self,
+        run_id: str,
+        step: str,
+        message: str,
+        status: str = "running",
+    ) -> None:
+        """Send validation progress log.
+
+        Args:
+            run_id: Benchmark run ID.
+            step: Current validation step (init, before, after, validate, complete).
+            message: Progress message.
+            status: Status (running, warning, completed, failed).
+        """
+        await self.broadcast(
+            run_id,
+            {
+                "type": "validation_log",
+                "run_id": run_id,
+                "validation_log": {
+                    "step": step,
+                    "message": message,
+                    "status": status,
+                    "timestamp": __import__("time").time(),
+                },
             },
         )
 

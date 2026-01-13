@@ -8,6 +8,7 @@ RUN pip install --no-cache-dir \
     uvicorn>=0.24.0 \
     pydantic>=2.0.0 \
     httpx>=0.25.0 \
+    aiohttp>=3.9.0 \
     numpy>=1.24.0 \
     openpyxl>=3.1.0 \
     websockets>=12.0 \

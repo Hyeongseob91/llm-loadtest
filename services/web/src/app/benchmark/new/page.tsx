@@ -3,9 +3,24 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { api, BenchmarkConfig, VLLMConfig, ValidationConfig } from "@/lib/api";
+import {
+  api,
+  BenchmarkConfig,
+  VLLMConfig,
+  SGLangConfig,
+  OllamaConfig,
+  TritonConfig,
+  FrameworkType,
+} from "@/lib/api";
 
 type PresetType = "quick" | "standard" | "stress";
+
+const FRAMEWORKS: { value: FrameworkType; label: string; description: string }[] = [
+  { value: "vllm", label: "vLLM", description: "High-throughput LLM serving" },
+  { value: "sglang", label: "SGLang", description: "Fast serving with RadixAttention" },
+  { value: "ollama", label: "Ollama", description: "Easy local LLM deployment" },
+  { value: "triton", label: "Triton", description: "NVIDIA Triton Inference Server" },
+];
 
 const PRESETS = {
   quick: {
@@ -49,14 +64,34 @@ export default function NewBenchmarkPage() {
   const [goodputEnabled, setGoodputEnabled] = useState(false);
   const [goodput, setGoodput] = useState({ ttft: 500, tpot: 100, e2e: 10000 });
   const [selectedPreset, setSelectedPreset] = useState<PresetType | null>(null);
-  const [vllmConfigEnabled, setVllmConfigEnabled] = useState(false);
+
+  // Framework selection (v1.1)
+  const [framework, setFramework] = useState<FrameworkType>("vllm");
+  const [frameworkConfigEnabled, setFrameworkConfigEnabled] = useState(false);
+
+  // Framework-specific configs
   const [vllmConfig, setVllmConfig] = useState<VLLMConfig>({
     gpu_memory_utilization: 0.9,
     tensor_parallel_size: 1,
     max_num_seqs: 256,
     quantization: "",
   });
+  const [sglangConfig, setSglangConfig] = useState<SGLangConfig>({
+    tensor_parallel_size: 1,
+    chunked_prefill: true,
+    mem_fraction_static: 0.9,
+  });
+  const [ollamaConfig, setOllamaConfig] = useState<OllamaConfig>({
+    context_length: 4096,
+    num_gpu: 1,
+  });
+  const [tritonConfig, setTritonConfig] = useState<TritonConfig>({
+    backend: "tensorrt_llm",
+    instance_count: 1,
+  });
+
   const [validationEnabled, setValidationEnabled] = useState(false);
+  const [dockerEnabled, setDockerEnabled] = useState(true);
   const [validationConfig, setValidationConfig] = useState({
     container_name: "",
     tolerance: 0.05,
@@ -96,6 +131,7 @@ export default function NewBenchmarkPage() {
       warmup: config.warmup!,
       timeout: config.timeout!,
       api_key: config.api_key,
+      framework: framework,
     };
 
     if (goodputEnabled) {
@@ -106,29 +142,78 @@ export default function NewBenchmarkPage() {
       };
     }
 
-    if (vllmConfigEnabled) {
-      const vllmConfigToSend: VLLMConfig = {};
-      if (vllmConfig.gpu_memory_utilization !== undefined) {
-        vllmConfigToSend.gpu_memory_utilization = vllmConfig.gpu_memory_utilization;
-      }
-      if (vllmConfig.tensor_parallel_size !== undefined) {
-        vllmConfigToSend.tensor_parallel_size = vllmConfig.tensor_parallel_size;
-      }
-      if (vllmConfig.max_num_seqs !== undefined) {
-        vllmConfigToSend.max_num_seqs = vllmConfig.max_num_seqs;
-      }
-      if (vllmConfig.quantization) {
-        vllmConfigToSend.quantization = vllmConfig.quantization;
-      }
-      if (Object.keys(vllmConfigToSend).length > 0) {
-        finalConfig.vllm_config = vllmConfigToSend;
+    // Framework-specific config
+    if (frameworkConfigEnabled) {
+      switch (framework) {
+        case "vllm": {
+          const cfg: VLLMConfig = {};
+          if (vllmConfig.gpu_memory_utilization !== undefined) {
+            cfg.gpu_memory_utilization = vllmConfig.gpu_memory_utilization;
+          }
+          if (vllmConfig.tensor_parallel_size !== undefined) {
+            cfg.tensor_parallel_size = vllmConfig.tensor_parallel_size;
+          }
+          if (vllmConfig.max_num_seqs !== undefined) {
+            cfg.max_num_seqs = vllmConfig.max_num_seqs;
+          }
+          if (vllmConfig.quantization) {
+            cfg.quantization = vllmConfig.quantization;
+          }
+          if (Object.keys(cfg).length > 0) {
+            finalConfig.framework_config = cfg;
+          }
+          break;
+        }
+        case "sglang": {
+          const cfg: SGLangConfig = {};
+          if (sglangConfig.tensor_parallel_size !== undefined) {
+            cfg.tensor_parallel_size = sglangConfig.tensor_parallel_size;
+          }
+          if (sglangConfig.chunked_prefill !== undefined) {
+            cfg.chunked_prefill = sglangConfig.chunked_prefill;
+          }
+          if (sglangConfig.mem_fraction_static !== undefined) {
+            cfg.mem_fraction_static = sglangConfig.mem_fraction_static;
+          }
+          if (Object.keys(cfg).length > 0) {
+            finalConfig.framework_config = cfg;
+          }
+          break;
+        }
+        case "ollama": {
+          const cfg: OllamaConfig = {};
+          if (ollamaConfig.context_length !== undefined) {
+            cfg.context_length = ollamaConfig.context_length;
+          }
+          if (ollamaConfig.num_gpu !== undefined) {
+            cfg.num_gpu = ollamaConfig.num_gpu;
+          }
+          if (Object.keys(cfg).length > 0) {
+            finalConfig.framework_config = cfg;
+          }
+          break;
+        }
+        case "triton": {
+          const cfg: TritonConfig = {};
+          if (tritonConfig.backend) {
+            cfg.backend = tritonConfig.backend;
+          }
+          if (tritonConfig.instance_count !== undefined) {
+            cfg.instance_count = tritonConfig.instance_count;
+          }
+          if (Object.keys(cfg).length > 0) {
+            finalConfig.framework_config = cfg;
+          }
+          break;
+        }
       }
     }
 
     if (validationEnabled) {
       finalConfig.validation_config = {
         enabled: true,
-        container_name: validationConfig.container_name || undefined,
+        docker_enabled: dockerEnabled,
+        container_name: dockerEnabled ? (validationConfig.container_name || undefined) : undefined,
         tolerance: validationConfig.tolerance,
       };
     }
@@ -243,12 +328,39 @@ export default function NewBenchmarkPage() {
           <div className="col-span-2 flex flex-col gap-4">
             {/* Server Settings */}
             <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-4">
-              <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
-                Server Settings
-              </h3>
-              <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-                ML35: vLLM (Local Serving)
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">
+                  Server Settings
+                </h3>
+                {/* AI Analysis Warning for non-vLLM - 우측 상단 */}
+                {framework !== "vllm" && (
+                  <span className="text-xs text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                    <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                      <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                    </svg>
+                    AI 분석은 vLLM만 지원!
+                  </span>
+                )}
               </div>
+
+              {/* Framework Selector */}
+              <div className="mb-3">
+                <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                  Serving Framework
+                </label>
+                <select
+                  value={framework}
+                  onChange={(e) => setFramework(e.target.value as FrameworkType)}
+                  className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                >
+                  {FRAMEWORKS.map((fw) => (
+                    <option key={fw.value} value={fw.value}>
+                      {fw.label} - {fw.description}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <div className="space-y-2">
                 <input
                   type="text"
@@ -257,7 +369,7 @@ export default function NewBenchmarkPage() {
                     setConfig({ ...config, server_url: e.target.value })
                   }
                   className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                  placeholder="http://your-vllm-server:8000"
+                  placeholder={framework === "ollama" ? "http://localhost:11434" : "http://your-server:8000"}
                   required
                 />
                 <div className="grid grid-cols-2 gap-2">
@@ -377,10 +489,10 @@ export default function NewBenchmarkPage() {
           </div>
         </div>
 
-        {/* vLLM Configuration Section */}
+        {/* Framework Configuration Section */}
         <div className="flex items-center gap-3">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-            vLLM Configuration
+            {FRAMEWORKS.find(f => f.value === framework)?.label} Configuration
           </h2>
           <div className="flex-1 h-px bg-gray-200 dark:bg-gray-700"></div>
           <span className="text-xs text-gray-500 dark:text-gray-400">선택사항 (분석 정확도 향상)</span>
@@ -392,100 +504,245 @@ export default function NewBenchmarkPage() {
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
-                checked={vllmConfigEnabled}
-                onChange={(e) => setVllmConfigEnabled(e.target.checked)}
+                checked={frameworkConfigEnabled}
+                onChange={(e) => setFrameworkConfigEnabled(e.target.checked)}
                 className="w-4 h-4 rounded border-gray-300"
               />
               <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                vLLM 설정 입력
+                {FRAMEWORKS.find(f => f.value === framework)?.label} 설정 입력
               </span>
             </label>
           </div>
 
-          {/* vLLM Config Inputs */}
-          <div className={`grid grid-cols-4 gap-4 mb-4 ${!vllmConfigEnabled && "opacity-50 pointer-events-none"}`}>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                GPU Memory Util
-              </label>
-              <input
-                type="number"
-                step="0.1"
-                min="0"
-                max="1"
-                value={vllmConfig.gpu_memory_utilization}
-                onChange={(e) =>
-                  setVllmConfig({ ...vllmConfig, gpu_memory_utilization: parseFloat(e.target.value) || 0.9 })
-                }
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="0.9"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                Tensor Parallel
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={vllmConfig.tensor_parallel_size}
-                onChange={(e) =>
-                  setVllmConfig({ ...vllmConfig, tensor_parallel_size: parseInt(e.target.value) || 1 })
-                }
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="1"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                Max Num Seqs
-              </label>
-              <input
-                type="number"
-                min="1"
-                value={vllmConfig.max_num_seqs}
-                onChange={(e) =>
-                  setVllmConfig({ ...vllmConfig, max_num_seqs: parseInt(e.target.value) || 256 })
-                }
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="256"
-              />
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
-                Quantization
-              </label>
-              <select
-                value={vllmConfig.quantization}
-                onChange={(e) =>
-                  setVllmConfig({ ...vllmConfig, quantization: e.target.value })
-                }
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-              >
-                <option value="">None</option>
-                <option value="awq">AWQ</option>
-                <option value="gptq">GPTQ</option>
-                <option value="fp8">FP8</option>
-                <option value="int8">INT8</option>
-              </select>
-            </div>
-          </div>
+          {/* vLLM Config */}
+          {framework === "vllm" && (
+            <>
+              <div className={`grid grid-cols-4 gap-4 mb-4 ${!frameworkConfigEnabled && "opacity-50 pointer-events-none"}`}>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    GPU Memory Util
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="1"
+                    value={vllmConfig.gpu_memory_utilization}
+                    onChange={(e) =>
+                      setVllmConfig({ ...vllmConfig, gpu_memory_utilization: parseFloat(e.target.value) || 0.9 })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="0.9"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Tensor Parallel
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={vllmConfig.tensor_parallel_size}
+                    onChange={(e) =>
+                      setVllmConfig({ ...vllmConfig, tensor_parallel_size: parseInt(e.target.value) || 1 })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Max Num Seqs
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={vllmConfig.max_num_seqs}
+                    onChange={(e) =>
+                      setVllmConfig({ ...vllmConfig, max_num_seqs: parseInt(e.target.value) || 256 })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="256"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Quantization
+                  </label>
+                  <select
+                    value={vllmConfig.quantization}
+                    onChange={(e) =>
+                      setVllmConfig({ ...vllmConfig, quantization: e.target.value })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="">None</option>
+                    <option value="awq">AWQ</option>
+                    <option value="gptq">GPTQ</option>
+                    <option value="fp8">FP8</option>
+                    <option value="int8">INT8</option>
+                  </select>
+                </div>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  <div><strong>GPU Memory Util</strong>: GPU 메모리 할당 비율 (기본값 0.9)</div>
+                  <div><strong>Tensor Parallel</strong>: 텐서 병렬화 GPU 수</div>
+                  <div><strong>Max Num Seqs</strong>: 최대 동시 시퀀스 수 (기본값 256)</div>
+                  <div><strong>Quantization</strong>: 모델 양자화 방식</div>
+                </div>
+              </div>
+            </>
+          )}
 
-          {/* Help Text */}
-          <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
-            <div className="font-medium text-gray-700 dark:text-gray-300 mb-2">
-              vLLM 설정 설명 (AI 분석 정확도 향상을 위해 실제 서버 설정값을 입력하세요)
-            </div>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-              <div><strong>GPU Memory Util</strong>: GPU 메모리 할당 비율 (기본값 0.9 = 90%)</div>
-              <div><strong>Tensor Parallel</strong>: 텐서 병렬화에 사용하는 GPU 수</div>
-              <div><strong>Max Num Seqs</strong>: 최대 동시 처리 시퀀스 수 (기본값 256)</div>
-              <div><strong>Quantization</strong>: 모델 양자화 방식 (없으면 None)</div>
-            </div>
-            <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-600 text-gray-400">
-              이 정보가 없으면 AI 분석에서 GPU 메트릭 해석 시 기본값을 가정합니다.
-            </div>
-          </div>
+          {/* SGLang Config */}
+          {framework === "sglang" && (
+            <>
+              <div className={`grid grid-cols-3 gap-4 mb-4 ${!frameworkConfigEnabled && "opacity-50 pointer-events-none"}`}>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Tensor Parallel
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={sglangConfig.tensor_parallel_size}
+                    onChange={(e) =>
+                      setSglangConfig({ ...sglangConfig, tensor_parallel_size: parseInt(e.target.value) || 1 })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Memory Fraction
+                  </label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0"
+                    max="1"
+                    value={sglangConfig.mem_fraction_static}
+                    onChange={(e) =>
+                      setSglangConfig({ ...sglangConfig, mem_fraction_static: parseFloat(e.target.value) || 0.9 })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="0.9"
+                  />
+                </div>
+                <div className="flex items-end pb-1">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={sglangConfig.chunked_prefill}
+                      onChange={(e) =>
+                        setSglangConfig({ ...sglangConfig, chunked_prefill: e.target.checked })
+                      }
+                      className="w-4 h-4 rounded border-gray-300"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Chunked Prefill</span>
+                  </label>
+                </div>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  <div><strong>Tensor Parallel</strong>: 텐서 병렬화 GPU 수</div>
+                  <div><strong>Memory Fraction</strong>: 정적 메모리 비율 (기본값 0.9)</div>
+                  <div><strong>Chunked Prefill</strong>: RadixAttention 청크 프리필 활성화</div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Ollama Config */}
+          {framework === "ollama" && (
+            <>
+              <div className={`grid grid-cols-2 gap-4 mb-4 ${!frameworkConfigEnabled && "opacity-50 pointer-events-none"}`}>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Context Length
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={ollamaConfig.context_length}
+                    onChange={(e) =>
+                      setOllamaConfig({ ...ollamaConfig, context_length: parseInt(e.target.value) || 4096 })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="4096"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Number of GPUs
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    value={ollamaConfig.num_gpu}
+                    onChange={(e) =>
+                      setOllamaConfig({ ...ollamaConfig, num_gpu: parseInt(e.target.value) || 1 })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="1"
+                  />
+                </div>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  <div><strong>Context Length</strong>: 컨텍스트 윈도우 크기 (기본값 4096)</div>
+                  <div><strong>Number of GPUs</strong>: 사용할 GPU 수 (0 = CPU only)</div>
+                </div>
+              </div>
+            </>
+          )}
+
+          {/* Triton Config */}
+          {framework === "triton" && (
+            <>
+              <div className={`grid grid-cols-2 gap-4 mb-4 ${!frameworkConfigEnabled && "opacity-50 pointer-events-none"}`}>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Backend
+                  </label>
+                  <select
+                    value={tritonConfig.backend}
+                    onChange={(e) =>
+                      setTritonConfig({ ...tritonConfig, backend: e.target.value })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                  >
+                    <option value="tensorrt_llm">TensorRT-LLM</option>
+                    <option value="vllm">vLLM</option>
+                    <option value="python">Python</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">
+                    Instance Count
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    value={tritonConfig.instance_count}
+                    onChange={(e) =>
+                      setTritonConfig({ ...tritonConfig, instance_count: parseInt(e.target.value) || 1 })
+                    }
+                    className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
+                    placeholder="1"
+                  />
+                </div>
+              </div>
+              <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                  <div><strong>Backend</strong>: Triton 백엔드 타입</div>
+                  <div><strong>Instance Count</strong>: 모델 인스턴스 수</div>
+                </div>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Goodput SLO Section */}
@@ -609,6 +866,24 @@ export default function NewBenchmarkPage() {
             </label>
           </div>
 
+          {/* Docker Toggle */}
+          <div className={`mb-4 ${!validationEnabled && "opacity-50 pointer-events-none"}`}>
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={dockerEnabled}
+                onChange={(e) => setDockerEnabled(e.target.checked)}
+                className="w-4 h-4 rounded border-gray-300"
+              />
+              <span className="text-sm text-gray-700 dark:text-gray-300">
+                Docker 배포
+              </span>
+              <span className="text-xs text-gray-400">
+                (vLLM이 Docker 컨테이너로 실행 중인 경우 체크)
+              </span>
+            </label>
+          </div>
+
           {/* Validation Config Inputs */}
           <div className={`grid grid-cols-2 gap-4 mb-4 ${!validationEnabled && "opacity-50 pointer-events-none"}`}>
             <div>
@@ -621,8 +896,13 @@ export default function NewBenchmarkPage() {
                 onChange={(e) =>
                   setValidationConfig({ ...validationConfig, container_name: e.target.value })
                 }
-                className="w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white"
-                placeholder="자동 감지 (비워두면 포트 기반 감지)"
+                disabled={!dockerEnabled}
+                className={`w-full px-3 py-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg text-gray-900 dark:text-white ${
+                  dockerEnabled
+                    ? "bg-white dark:bg-gray-700"
+                    : "bg-gray-100 dark:bg-gray-800 opacity-50 cursor-not-allowed"
+                }`}
+                placeholder={dockerEnabled ? "자동 감지 (비워두면 포트 기반 감지)" : "(Docker 배포 시에만 사용)"}
               />
             </div>
             <div>
@@ -644,6 +924,18 @@ export default function NewBenchmarkPage() {
             </div>
           </div>
 
+          {/* Prometheus-only Warning */}
+          {validationEnabled && !dockerEnabled && (
+            <div className="mb-4 p-2 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+              <p className="text-xs text-amber-700 dark:text-amber-400 flex items-center gap-1">
+                <svg className="w-3.5 h-3.5" fill="currentColor" viewBox="0 0 20 20">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+                Prometheus (/metrics) 검증만 수행됩니다.
+              </p>
+            </div>
+          )}
+
           {/* Help Text */}
           <div className="text-xs text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-700/50 rounded-lg p-3">
             <div className="font-medium text-gray-700 dark:text-gray-300 mb-2">
@@ -654,10 +946,12 @@ export default function NewBenchmarkPage() {
                 <span className="font-semibold text-blue-600 dark:text-blue-400 min-w-[120px]">Prometheus 검증</span>
                 <span>vLLM /metrics 엔드포인트에서 요청 수, TTFT, 토큰 수 비교</span>
               </div>
-              <div className="flex items-start gap-2">
-                <span className="font-semibold text-green-600 dark:text-green-400 min-w-[120px]">Docker 로그 검증</span>
-                <span>컨테이너 로그에서 HTTP 200 카운트, throughput, 에러 감지</span>
-              </div>
+              {dockerEnabled && (
+                <div className="flex items-start gap-2">
+                  <span className="font-semibold text-green-600 dark:text-green-400 min-w-[120px]">Docker 로그 검증</span>
+                  <span>컨테이너 로그에서 HTTP 200 카운트, throughput, 에러 감지</span>
+                </div>
+              )}
             </div>
             <div className="mt-2 pt-2 border-t border-gray-200 dark:border-gray-600 text-gray-400">
               네트워크 손실이나 측정 오류를 감지하여 테스트 결과의 신뢰성을 검증합니다.

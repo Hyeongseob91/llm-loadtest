@@ -133,6 +133,11 @@ class BenchmarkResult(BaseModel):
         default=None, description="Server infrastructure captured at benchmark start"
     )
 
+    # Validation result (Prometheus + Docker logs)
+    validation: Optional["ValidationResult"] = Field(
+        default=None, description="Cross-validation result against server metrics"
+    )
+
     def get_summary(self) -> dict:
         """Get summary of best results across concurrency levels."""
         if not self.results:
@@ -323,3 +328,98 @@ class ServerInfraInfo(BaseModel):
         default=None, description="GPU metrics captured during benchmark"
     )
     captured_at: Optional[datetime] = Field(default=None, description="Capture timestamp")
+
+
+# ============================================================
+# Validation Models (Phase: Validation Loop)
+# ============================================================
+
+
+class MetricComparison(BaseModel):
+    """Individual metric comparison result."""
+
+    metric_name: str = Field(description="Name of the metric being compared")
+    client_value: float = Field(description="Value measured by client")
+    server_value: float = Field(description="Value from server (Prometheus/Docker)")
+    difference_percent: float = Field(description="Difference percentage")
+    passed: bool = Field(description="Whether within tolerance")
+
+
+class DockerLogMetrics(BaseModel):
+    """Metrics parsed from Docker container logs."""
+
+    # HTTP request statistics
+    http_200_count: int = Field(default=0, description="Successful HTTP 200 responses")
+    http_error_count: int = Field(default=0, description="HTTP 4xx/5xx errors")
+
+    # Engine statistics (from vLLM logs)
+    avg_prompt_throughput: float = Field(default=0.0, description="Average prompt throughput (tokens/s)")
+    avg_generation_throughput: float = Field(
+        default=0.0, description="Average generation throughput (tokens/s)"
+    )
+    peak_kv_cache_usage: float = Field(default=0.0, description="Peak KV cache usage percentage")
+    avg_running_reqs: float = Field(default=0.0, description="Average running requests")
+    avg_waiting_reqs: float = Field(default=0.0, description="Average waiting requests")
+    prefix_cache_hit_rate: float = Field(default=0.0, description="Prefix cache hit rate percentage")
+
+    # Error/warning logs
+    error_messages: list[str] = Field(default_factory=list, description="ERROR level log messages")
+    warning_messages: list[str] = Field(default_factory=list, description="WARNING level log messages")
+
+    # Metadata
+    log_start_time: Optional[datetime] = Field(default=None, description="Log collection start time")
+    log_end_time: Optional[datetime] = Field(default=None, description="Log collection end time")
+    total_log_lines: int = Field(default=0, description="Total log lines processed")
+    container_name: Optional[str] = Field(default=None, description="Docker container name")
+
+
+class DockerLogValidation(BaseModel):
+    """Docker log-based validation result."""
+
+    passed: bool = Field(description="Overall validation passed")
+    http_request_match: bool = Field(description="Client requests vs HTTP 200 count matched")
+    throughput_match: bool = Field(description="Throughput within tolerance")
+    has_errors: bool = Field(description="ERROR logs detected")
+    comparisons: list[MetricComparison] = Field(
+        default_factory=list, description="Detailed metric comparisons"
+    )
+    warnings: list[str] = Field(default_factory=list, description="Warning messages")
+    docker_metrics: Optional[DockerLogMetrics] = Field(
+        default=None, description="Raw Docker log metrics"
+    )
+
+
+class PrometheusValidation(BaseModel):
+    """Prometheus metrics-based validation result."""
+
+    passed: bool = Field(description="Overall validation passed")
+    comparisons: list[MetricComparison] = Field(
+        default_factory=list, description="Detailed metric comparisons"
+    )
+    warnings: list[str] = Field(default_factory=list, description="Warning messages")
+
+
+class ValidationResult(BaseModel):
+    """Combined validation result (Prometheus + Docker logs)."""
+
+    overall_passed: bool = Field(description="Overall validation passed")
+    tolerance: float = Field(default=0.05, description="Default tolerance (5%)")
+
+    # Prometheus validation
+    prometheus_validation: Optional[PrometheusValidation] = Field(
+        default=None, description="Prometheus metrics validation"
+    )
+    prometheus_available: bool = Field(default=False, description="Prometheus metrics were available")
+
+    # Docker log validation
+    docker_log_validation: Optional[DockerLogValidation] = Field(
+        default=None, description="Docker log validation"
+    )
+    docker_available: bool = Field(default=False, description="Docker logs were available")
+
+    # Summary
+    all_comparisons: list[MetricComparison] = Field(
+        default_factory=list, description="All metric comparisons"
+    )
+    all_warnings: list[str] = Field(default_factory=list, description="All warning messages")
+    validated_at: Optional[datetime] = Field(default=None, description="Validation timestamp")

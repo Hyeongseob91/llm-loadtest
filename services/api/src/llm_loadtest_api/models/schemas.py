@@ -1,9 +1,16 @@
 """API request/response schemas."""
 
 from datetime import datetime
-from typing import Optional
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
+
+
+# ============================================================
+# Framework Types
+# ============================================================
+
+FrameworkType = Literal["vllm", "sglang", "ollama", "triton"]
 
 
 class GoodputThresholdsSchema(BaseModel):
@@ -12,6 +19,26 @@ class GoodputThresholdsSchema(BaseModel):
     ttft_ms: Optional[float] = Field(default=None, description="TTFT threshold (ms)")
     tpot_ms: Optional[float] = Field(default=None, description="TPOT threshold (ms)")
     e2e_ms: Optional[float] = Field(default=None, description="E2E threshold (ms)")
+
+
+class ValidationConfig(BaseModel):
+    """Validation configuration for cross-checking client metrics against server."""
+
+    enabled: bool = Field(default=False, description="Enable validation")
+    docker_enabled: bool = Field(
+        default=True,
+        description="Docker deployment (False = Prometheus only validation)"
+    )
+    container_name: Optional[str] = Field(
+        default=None,
+        description="Docker container name (auto-detected if not provided)"
+    )
+    tolerance: float = Field(
+        default=0.05,
+        ge=0.0,
+        le=1.0,
+        description="Tolerance for metric comparison (default 5%)"
+    )
 
 
 class VLLMConfigInput(BaseModel):
@@ -43,6 +70,64 @@ class VLLMConfigInput(BaseModel):
     )
 
 
+class SGLangConfigInput(BaseModel):
+    """User-provided SGLang configuration for analysis accuracy."""
+
+    tensor_parallel_size: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Number of GPUs for tensor parallelism. Default: 1"
+    )
+    chunked_prefill: Optional[bool] = Field(
+        default=None,
+        description="Enable chunked prefill. Default: true"
+    )
+    mem_fraction_static: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Static memory fraction. Default: 0.9"
+    )
+
+
+class OllamaConfigInput(BaseModel):
+    """User-provided Ollama configuration for analysis accuracy."""
+
+    context_length: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Context length. Default: 4096"
+    )
+    num_gpu: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Number of GPUs to use. Default: 1"
+    )
+
+
+class TritonConfigInput(BaseModel):
+    """User-provided Triton configuration for analysis accuracy."""
+
+    backend: Optional[str] = Field(
+        default=None,
+        description="Backend type (e.g., tensorrt_llm, vllm). Default: tensorrt_llm"
+    )
+    instance_count: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Number of instances. Default: 1"
+    )
+
+
+# Union type for framework configs
+FrameworkConfigInput = Union[
+    VLLMConfigInput,
+    SGLangConfigInput,
+    OllamaConfigInput,
+    TritonConfigInput
+]
+
+
 class BenchmarkRequest(BaseModel):
     """Request to start a benchmark."""
 
@@ -61,9 +146,23 @@ class BenchmarkRequest(BaseModel):
     goodput_thresholds: Optional[GoodputThresholdsSchema] = Field(
         default=None, description="Goodput SLO thresholds"
     )
+    # New framework fields (v1.1)
+    framework: Optional[FrameworkType] = Field(
+        default="vllm",
+        description="Serving framework type (vllm, sglang, ollama, triton)"
+    )
+    framework_config: Optional[FrameworkConfigInput] = Field(
+        default=None,
+        description="Framework-specific configuration for improved analysis accuracy"
+    )
+    # Deprecated: use framework_config instead
     vllm_config: Optional[VLLMConfigInput] = Field(
         default=None,
-        description="Optional vLLM configuration for improved analysis accuracy"
+        description="[Deprecated] Use framework_config instead. vLLM configuration for analysis"
+    )
+    validation_config: Optional[ValidationConfig] = Field(
+        default=None,
+        description="Optional validation configuration for cross-checking metrics"
     )
 
 
@@ -75,6 +174,10 @@ class BenchmarkStatus(BaseModel):
     server_url: str
     model: str
     adapter: str
+    framework: Optional[FrameworkType] = Field(
+        default="vllm",
+        description="Serving framework type"
+    )
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
     created_at: datetime
@@ -122,6 +225,14 @@ class BenchmarkResponse(BaseModel):
     server_url: str
     model: str
     adapter: str
+    framework: Optional[FrameworkType] = Field(
+        default="vllm",
+        description="Serving framework type"
+    )
+    framework_config: Optional[dict] = Field(
+        default=None,
+        description="Framework-specific configuration"
+    )
     results: list[ConcurrencyResultSchema]
     summary: dict
     started_at: datetime
