@@ -4,10 +4,16 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { useState, useEffect, useRef } from "react";
 import { api } from "@/lib/api";
-import { ArrowLeft, Loader2, AlertCircle, RefreshCw, Sparkles, Download } from "lucide-react";
+import { ArrowLeft, Loader2, AlertCircle, RefreshCw, Sparkles, Download, ChevronDown } from "lucide-react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+const languageOptions = [
+  { value: "ko", label: "한국어" },
+  { value: "en", label: "English" },
+  { value: "zh", label: "中文" },
+];
 
 export default function AnalysisPage() {
   const params = useParams();
@@ -20,6 +26,7 @@ export default function AnalysisPage() {
   const [error, setError] = useState<string | null>(null);
   const [hasStarted, setHasStarted] = useState(false);
   const [isThinkingModel, setIsThinkingModel] = useState(false);
+  const [language, setLanguage] = useState("ko");
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Fetch benchmark status and result
@@ -41,7 +48,7 @@ export default function AnalysisPage() {
     }
   }, [analysis, isGenerating]);
 
-  // 분석 결과 다운로드
+  // Download analysis result
   const downloadAnalysis = () => {
     const modelName = status?.model?.replace(/[/\\:*?"<>|]/g, "-") || "unknown";
     const dateStr = new Date().toISOString().split("T")[0];
@@ -70,7 +77,7 @@ export default function AnalysisPage() {
       const model = status?.model || "";
 
       const response = await fetch(
-        `/api/v1/benchmark/result/${runId}/analysis?server_url=${encodeURIComponent(serverUrl)}&model=${encodeURIComponent(model)}&is_thinking_model=${isThinkingModel}`
+        `/api/v1/benchmark/result/${runId}/analysis?server_url=${encodeURIComponent(serverUrl)}&model=${encodeURIComponent(model)}&is_thinking_model=${isThinkingModel}&language=${language}`
       );
 
       if (!response.ok) {
@@ -100,7 +107,7 @@ export default function AnalysisPage() {
             }
             try {
               const parsed = JSON.parse(data);
-              // Thinking 상태 처리
+              // Thinking status handling
               if (parsed.thinking !== undefined) {
                 setIsThinking(parsed.thinking);
               }
@@ -119,7 +126,7 @@ export default function AnalysisPage() {
         }
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "분석 생성 중 오류가 발생했습니다");
+      setError(err instanceof Error ? err.message : "An error occurred while generating analysis");
     } finally {
       setIsGenerating(false);
     }
@@ -137,13 +144,13 @@ export default function AnalysisPage() {
             <ArrowLeft className="h-5 w-5" />
           </Link>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            AI 분석 보고서
+            AI Analysis Report
           </h1>
         </div>
         <div className="bg-yellow-50 dark:bg-yellow-900/20 rounded-xl p-6 text-center">
           <AlertCircle className="h-12 w-12 text-yellow-500 mx-auto mb-4" />
           <p className="text-yellow-600 dark:text-yellow-400">
-            벤치마크가 아직 진행 중입니다. 완료 후 분석을 실행할 수 있습니다.
+            Benchmark is still running. Analysis can be performed after completion.
           </p>
         </div>
       </div>
@@ -163,7 +170,7 @@ export default function AnalysisPage() {
           </Link>
           <div>
             <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-              AI 분석 보고서
+              AI Analysis Report
             </h1>
             <p className="mt-1 text-gray-600 dark:text-gray-400">
               {status?.model} @ {status?.server_url}
@@ -171,7 +178,23 @@ export default function AnalysisPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* Thinking 모델 체크박스 */}
+          {/* Language Selector */}
+          <div className="relative">
+            <select
+              value={language}
+              onChange={(e) => setLanguage(e.target.value)}
+              disabled={isGenerating}
+              className="appearance-none bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-lg px-3 py-2 pr-8 text-sm text-gray-700 dark:text-gray-300 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {languageOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none" />
+          </div>
+          {/* Thinking Model Checkbox */}
           <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
             <input
               type="checkbox"
@@ -180,18 +203,8 @@ export default function AnalysisPage() {
               disabled={isGenerating}
               className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
             />
-            <span>Thinking 모델</span>
+            <span>Thinking Model</span>
           </label>
-          {/* Download 버튼 - 분석 완료 후에만 표시 */}
-          {!isGenerating && analysis && (
-            <button
-              onClick={downloadAnalysis}
-              className="flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-            >
-              <Download className="h-4 w-4" />
-              Download
-            </button>
-          )}
           <button
             onClick={startAnalysis}
             disabled={isGenerating}
@@ -204,17 +217,17 @@ export default function AnalysisPage() {
             {isGenerating ? (
               <>
                 <Loader2 className="h-4 w-4 animate-spin" />
-                분석 생성 중...
+                Generating...
               </>
             ) : hasStarted ? (
               <>
                 <RefreshCw className="h-4 w-4" />
-                다시 분석
+                Regenerate
               </>
             ) : (
               <>
                 <Sparkles className="h-4 w-4" />
-                분석 시작
+                Start Analysis
               </>
             )}
           </button>
@@ -225,29 +238,29 @@ export default function AnalysisPage() {
       {result?.summary && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-            벤치마크 결과 요약
+            Benchmark Summary
           </h2>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-              <div className="text-xs text-gray-500 dark:text-gray-400">최고 처리량</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">Best Throughput</div>
               <div className="text-xl font-bold text-gray-900 dark:text-white">
                 {result.summary.best_throughput?.toFixed(1)} <span className="text-sm font-normal">tok/s</span>
               </div>
             </div>
             <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-              <div className="text-xs text-gray-500 dark:text-gray-400">최저 TTFT (p50)</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">Best TTFT (p50)</div>
               <div className="text-xl font-bold text-gray-900 dark:text-white">
                 {result.summary.best_ttft_p50?.toFixed(1)} <span className="text-sm font-normal">ms</span>
               </div>
             </div>
             <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-              <div className="text-xs text-gray-500 dark:text-gray-400">최적 동시성</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">Best Concurrency</div>
               <div className="text-xl font-bold text-gray-900 dark:text-white">
                 {result.summary.best_concurrency}
               </div>
             </div>
             <div className="bg-gray-50 dark:bg-gray-700/50 rounded-lg p-4">
-              <div className="text-xs text-gray-500 dark:text-gray-400">평균 Goodput</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">Avg Goodput</div>
               <div className="text-xl font-bold text-gray-900 dark:text-white">
                 {result.summary.avg_goodput_percent?.toFixed(1) ?? "N/A"} <span className="text-sm font-normal">%</span>
               </div>
@@ -259,19 +272,31 @@ export default function AnalysisPage() {
       {/* Analysis Content */}
       <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
         <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
-          <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-blue-600" />
-            AI 분석 결과
-          </h2>
-          {isGenerating && (
-            <span className={`text-xs px-2 py-1 rounded flex items-center gap-1 ${
-              isThinking
-                ? "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30"
-                : "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30"
-            }`}>
-              <Loader2 className="h-3 w-3 animate-spin" />
-              {isThinking ? "AI 분석 중..." : "보고서 작성 중"}
-            </span>
+          <div className="flex items-center gap-2">
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
+              <Sparkles className="h-5 w-5 text-blue-600" />
+              Analysis Results
+            </h2>
+            {isGenerating && (
+              <span className={`text-xs px-2 py-1 rounded flex items-center gap-1 ${
+                isThinking
+                  ? "text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/30"
+                  : "text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30"
+              }`}>
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {isThinking ? "AI Thinking..." : "Writing Report"}
+              </span>
+            )}
+          </div>
+          {/* Download Button - shown after analysis is complete */}
+          {!isGenerating && analysis && (
+            <button
+              onClick={downloadAnalysis}
+              className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              <Download className="h-4 w-4" />
+              Download
+            </button>
           )}
         </div>
 
@@ -283,17 +308,17 @@ export default function AnalysisPage() {
             <div className="bg-red-50 dark:bg-red-900/20 rounded-lg p-4 text-red-600 dark:text-red-400">
               <div className="flex items-center gap-2 font-medium mb-2">
                 <AlertCircle className="h-5 w-5" />
-                오류 발생
+                Error
               </div>
               <p className="text-sm">{error}</p>
             </div>
           ) : !hasStarted ? (
             <div className="text-center py-12 text-gray-500 dark:text-gray-400">
               <Sparkles className="h-12 w-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
-              <p>상단의 "분석 시작" 버튼을 클릭하여</p>
-              <p>AI 분석 보고서를 생성하세요.</p>
+              <p>Click the &quot;Start Analysis&quot; button above</p>
+              <p>to generate an AI analysis report.</p>
               <p className="mt-4 text-sm text-gray-400 dark:text-gray-500">
-                벤치마크 서버의 vLLM 모델을 사용하여 분석합니다.
+                Uses the vLLM model from the benchmark server for analysis.
               </p>
             </div>
           ) : analysis ? (
@@ -301,7 +326,7 @@ export default function AnalysisPage() {
               <ReactMarkdown
                 remarkPlugins={[remarkGfm]}
                 components={{
-                  // GFM 테이블 스타일링
+                  // GFM table styling
                   table: ({ children }) => (
                     <div className="overflow-x-auto my-4">
                       <table className="min-w-full border-collapse border border-gray-300 dark:border-gray-600 text-sm">
@@ -348,17 +373,17 @@ export default function AnalysisPage() {
                     </span>
                   </div>
                   <p className="text-amber-600 dark:text-amber-400 font-medium">
-                    AI가 벤치마크 결과를 분석하고 있습니다...
+                    AI is analyzing benchmark results...
                   </p>
                   <p className="text-sm text-gray-500 dark:text-gray-400 mt-2">
-                    Thinking 모델이 깊이 있는 분석을 수행 중입니다
+                    Thinking model is performing in-depth analysis
                   </p>
                 </>
               ) : (
                 <>
                   <Loader2 className="h-8 w-8 animate-spin text-blue-600 mx-auto mb-4" />
                   <p className="text-gray-600 dark:text-gray-400">
-                    vLLM에서 분석을 생성하고 있습니다...
+                    Generating analysis from vLLM...
                   </p>
                 </>
               )}
@@ -370,8 +395,8 @@ export default function AnalysisPage() {
       {/* Info */}
       <div className="bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 text-sm text-gray-500 dark:text-gray-400">
         <p>
-          이 분석은 벤치마크에 사용된 vLLM 서버 ({status?.server_url})의 {status?.model} 모델을 사용하여 생성됩니다.
-          분석 결과는 AI가 생성한 것으로, 참고 자료로만 활용해주세요.
+          This analysis is generated using the {status?.model} model from the vLLM server ({status?.server_url}).
+          The analysis is AI-generated and should be used as reference only.
         </p>
       </div>
     </div>

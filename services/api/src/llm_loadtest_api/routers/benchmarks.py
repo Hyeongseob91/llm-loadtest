@@ -481,12 +481,21 @@ def _export_to_xlsx(result: dict) -> bytes:
     return output.getvalue()
 
 
+# Language instructions for AI analysis report
+LANGUAGE_INSTRUCTIONS = {
+    "ko": "한국어로 답변하세요.",
+    "en": "Write your response in English.",
+    "zh": "请用中文回答。",
+}
+
+
 @router.get("/result/{run_id}/analysis")
 async def analyze_result(
     run_id: str,
     server_url: str = Query(default="", description="vLLM server URL"),
     model: str = Query(default="", description="Model name (uses benchmark model if empty)"),
     is_thinking_model: bool = Query(default=False, description="Enable thinking model mode (buffers until </think> tag)"),
+    language: str = Query(default="ko", description="Report language (ko, en, zh)"),
     service: BenchmarkService = Depends(get_service),
 ) -> StreamingResponse:
     """Generate AI analysis of benchmark results using vLLM.
@@ -518,7 +527,7 @@ async def analyze_result(
     if framework and framework != "vllm":
         raise HTTPException(
             status_code=400,
-            detail=f"AI 분석 도구는 현재 vLLM 프레임워크만 지원이 가능합니다. (현재: {framework})"
+            detail=f"AI analysis currently only supports vLLM framework. (Current: {framework})"
         )
 
     # Use model from result if not specified
@@ -529,11 +538,14 @@ async def analyze_result(
 
     async def generate_analysis():
         """Stream analysis from vLLM."""
-        # System prompt 구성: Thinking 모델이 아니면 /no_think 추가
-        base_system_prompt = """당신은 LLM 서버 성능 분석 전문가입니다. 벤치마크 결과를 분석하여 마크다운 형식의 보고서를 작성합니다.
+        # Get language instruction
+        language_instruction = LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS["ko"])
+
+        # System prompt with language instruction
+        base_system_prompt = f"""당신은 LLM 서버 성능 분석 전문가입니다. 벤치마크 결과를 분석하여 마크다운 형식의 보고서를 작성합니다.
 
 [답변 원칙]
-- 한국어로 답변
+- {language_instruction}
 - 전문 용어는 괄호 안에 간단한 설명 추가 (예: TTFT(첫 토큰 응답 시간))
 - 구조화된 마크다운 형식 사용
 - 핵심부터 설명, 불필요한 서론 생략"""
@@ -627,7 +639,7 @@ async def analyze_result(
                                 except json.JSONDecodeError:
                                     continue
         except httpx.ConnectError:
-            yield f"data: {json.dumps({'error': f'vLLM 서버에 연결할 수 없습니다: {server_url}'})}\n\n"
+            yield f"data: {json.dumps({'error': f'Cannot connect to vLLM server: {server_url}'})}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
