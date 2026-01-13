@@ -3,9 +3,12 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Generator, Optional
+
+# 한국 표준시 (KST, UTC+9)
+KST = timezone(timedelta(hours=9))
 
 from pydantic import BaseModel
 
@@ -97,13 +100,14 @@ class Database:
         config: dict,
     ) -> str:
         """Create a new benchmark run record."""
+        now_kst = datetime.now(KST).isoformat()
         with self._get_connection() as conn:
             conn.execute(
                 """
-                INSERT INTO benchmark_runs (id, server_url, model, adapter, config_json, status)
-                VALUES (?, ?, ?, ?, ?, 'pending')
+                INSERT INTO benchmark_runs (id, server_url, model, adapter, config_json, status, created_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', ?)
                 """,
-                (run_id, server_url, model, adapter, json.dumps(config)),
+                (run_id, server_url, model, adapter, json.dumps(config), now_kst),
             )
             conn.commit()
         return run_id
@@ -118,14 +122,18 @@ class Database:
         """Update run status."""
         with self._get_connection() as conn:
             if started_at:
+                # 한국 시간으로 변환
+                started_at_kst = started_at.astimezone(KST) if started_at.tzinfo else started_at.replace(tzinfo=KST)
                 conn.execute(
                     "UPDATE benchmark_runs SET status = ?, started_at = ? WHERE id = ?",
-                    (status, started_at.isoformat(), run_id),
+                    (status, started_at_kst.isoformat(), run_id),
                 )
             elif completed_at:
+                # 한국 시간으로 변환
+                completed_at_kst = completed_at.astimezone(KST) if completed_at.tzinfo else completed_at.replace(tzinfo=KST)
                 conn.execute(
                     "UPDATE benchmark_runs SET status = ?, completed_at = ? WHERE id = ?",
-                    (status, completed_at.isoformat(), run_id),
+                    (status, completed_at_kst.isoformat(), run_id),
                 )
             else:
                 conn.execute(
@@ -136,6 +144,7 @@ class Database:
 
     def save_result(self, run_id: str, result: dict) -> None:
         """Save benchmark result."""
+        now_kst = datetime.now(KST).isoformat()
         with self._get_connection() as conn:
             conn.execute(
                 """
@@ -143,7 +152,7 @@ class Database:
                 SET result_json = ?, status = 'completed', completed_at = ?
                 WHERE id = ?
                 """,
-                (json.dumps(result, default=str), datetime.now().isoformat(), run_id),
+                (json.dumps(result, default=str), now_kst, run_id),
             )
             conn.commit()
 

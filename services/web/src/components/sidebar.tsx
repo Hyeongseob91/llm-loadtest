@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Home, Plus, History, GitCompare, Activity, Moon, Sun, Cpu } from "lucide-react";
+import { Home, Plus, History, GitCompare, Activity, Moon, Sun, Cpu, Github } from "lucide-react";
 import { clsx } from "clsx";
 import { useTheme } from "next-themes";
 import { useEffect, useState } from "react";
@@ -10,8 +10,8 @@ import { useEffect, useState } from "react";
 const navItems = [
   { href: "/", label: "Dashboard", icon: Home },
   { href: "/benchmark/new", label: "New Benchmark", icon: Plus },
-  { href: "/recommend", label: "Recommend", icon: Cpu },
   { href: "/history", label: "History", icon: History },
+  { href: "/recommend", label: "Recommend", icon: Cpu },
   { href: "/compare", label: "Compare", icon: GitCompare },
 ];
 
@@ -79,7 +79,15 @@ export function Sidebar() {
         )}
         <div className="text-sm text-gray-500 dark:text-gray-400">
           <p>LLM Loadtest v0.1.0</p>
-          <p className="text-xs mt-1">Load testing for LLM servers</p>
+          <a
+            href="https://github.com/Hyeongseob91"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1.5 mt-2 text-xs hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+          >
+            <Github className="h-3.5 w-3.5" />
+            <span>Built by Harrison</span>
+          </a>
         </div>
       </div>
     </aside>

@@ -1,15 +1,15 @@
 "use client";
 
-import { useParams, useSearchParams } from "next/navigation";
+import { useParams } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { api, ConcurrencyResult, ValidationResult, MetricComparison } from "@/lib/api";
 import { MetricCard } from "@/components/metric-card";
 import { useBenchmarkProgress } from "@/hooks/useBenchmarkProgress";
 import { RequestLogPanel } from "@/components/RequestLogPanel";
 import { ValidationLogPanel } from "@/components/ValidationLogPanel";
-import { Gauge, Clock, Activity, AlertCircle, CheckCircle, CheckCircle2, XCircle, Loader2, FileText, Zap, Timer, ShieldCheck, AlertTriangle, Share2, Link2 } from "lucide-react";
+import { Gauge, Clock, Activity, AlertCircle, CheckCircle, CheckCircle2, XCircle, Loader2, FileText, Zap, Timer, ShieldCheck, AlertTriangle } from "lucide-react";
 import {
   LineChart,
   Line,
@@ -43,21 +43,7 @@ const metricDescriptions: Record<string, string> = {
 
 export default function BenchmarkResultPage() {
   const params = useParams();
-  const searchParams = useSearchParams();
   const runId = params.id as string;
-  const isSharedView = searchParams.get("shared") === "true";
-
-  // 공유 링크 복사 state
-  const [copied, setCopied] = useState(false);
-
-  // 공유 링크 복사 함수
-  const handleShare = useCallback(() => {
-    const shareUrl = `${window.location.origin}/benchmark/${runId}?shared=true`;
-    navigator.clipboard.writeText(shareUrl).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  }, [runId]);
 
   const { data: status } = useQuery({
     queryKey: ["run-status", runId],
@@ -224,16 +210,6 @@ export default function BenchmarkResultPage() {
 
   return (
     <div className="space-y-6">
-      {/* Shared View Banner */}
-      {isSharedView && (
-        <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg px-4 py-3 flex items-center gap-3">
-          <Link2 className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0" />
-          <p className="text-sm text-blue-700 dark:text-blue-300">
-            공유된 벤치마크 결과입니다. 읽기 전용으로 표시됩니다.
-          </p>
-        </div>
-      )}
-
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -249,27 +225,7 @@ export default function BenchmarkResultPage() {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          {/* Share Button - 공유 뷰가 아닐 때만 표시 */}
-          {!isRunning && !isSharedView && (
-            <button
-              onClick={handleShare}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg transition-colors"
-            >
-              {copied ? (
-                <>
-                  <CheckCircle className="h-4 w-4 text-green-500" />
-                  <span>복사됨!</span>
-                </>
-              ) : (
-                <>
-                  <Share2 className="h-4 w-4" />
-                  <span>공유</span>
-                </>
-              )}
-            </button>
-          )}
-
+        <div className="flex items-center gap-2">
           {/* Status Badge */}
           <div className={`flex items-center gap-2 ${isRunning ? "text-blue-600 dark:text-blue-400" : "text-green-600 dark:text-green-400"}`}>
             {isRunning ? (
@@ -555,30 +511,11 @@ export default function BenchmarkResultPage() {
       {/* Validation Results - 완료 후 검증 결과가 있을 때만 표시 */}
       {!isRunning && result?.validation && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <ShieldCheck className="h-6 w-6 text-blue-600 dark:text-blue-400" />
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                Validation Results
-              </h2>
-            </div>
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium ${
-              result.validation.overall_passed
-                ? "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
-                : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
-            }`}>
-              {result.validation.overall_passed ? (
-                <>
-                  <CheckCircle2 className="h-4 w-4" />
-                  PASSED
-                </>
-              ) : (
-                <>
-                  <XCircle className="h-4 w-4" />
-                  FAILED
-                </>
-              )}
-            </div>
+          <div className="flex items-center gap-3 mb-6">
+            <ShieldCheck className="h-6 w-6 text-blue-600 dark:text-blue-400" />
+            <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+              Validation Results
+            </h2>
           </div>
 
           {/* Tolerance Info */}
@@ -811,8 +748,8 @@ export default function BenchmarkResultPage() {
               상세 결과
             </h2>
             <div className="flex items-center gap-3">
-              {/* AI 분석 보고서 링크 - 공유 뷰가 아닐 때만 표시 */}
-              {result?.results && result.results.length > 0 && !isSharedView && (
+              {/* AI 분석 보고서 링크 */}
+              {result?.results && result.results.length > 0 && (
                 result?.framework && result.framework !== "vllm" ? (
                   // vLLM이 아닌 경우 경고 메시지 표시
                   <div className="flex items-center gap-1.5 text-sm text-gray-400 dark:text-gray-500">

@@ -486,6 +486,7 @@ async def analyze_result(
     run_id: str,
     server_url: str = Query(default="", description="vLLM server URL"),
     model: str = Query(default="", description="Model name (uses benchmark model if empty)"),
+    is_thinking_model: bool = Query(default=False, description="Enable thinking model mode (buffers until </think> tag)"),
     service: BenchmarkService = Depends(get_service),
 ) -> StreamingResponse:
     """Generate AI analysis of benchmark results using vLLM.
@@ -496,6 +497,7 @@ async def analyze_result(
         run_id: The benchmark run ID.
         server_url: vLLM server URL for analysis generation.
         model: Model to use for analysis (defaults to benchmark's model).
+        is_thinking_model: If True, waits for </think> tag before streaming. If False, streams immediately.
 
     Returns:
         StreamingResponse with SSE format.
@@ -527,10 +529,8 @@ async def analyze_result(
 
     async def generate_analysis():
         """Stream analysis from vLLM."""
-        # System prompt: /no_think로 thinking 모드 비활성화 시도
-        # Qwen3 VL 모델은 </think> 태그로 thinking 종료
-        system_prompt = """/no_think
-당신은 LLM 서버 성능 분석 전문가입니다. 벤치마크 결과를 분석하여 마크다운 형식의 보고서를 작성합니다.
+        # System prompt 구성: Thinking 모델이 아니면 /no_think 추가
+        base_system_prompt = """당신은 LLM 서버 성능 분석 전문가입니다. 벤치마크 결과를 분석하여 마크다운 형식의 보고서를 작성합니다.
 
 [답변 원칙]
 - 한국어로 답변
@@ -538,9 +538,16 @@ async def analyze_result(
 - 구조화된 마크다운 형식 사용
 - 핵심부터 설명, 불필요한 서론 생략"""
 
+        # Thinking 모델이 아니면 /no_think 지시어 추가
+        if is_thinking_model:
+            system_prompt = base_system_prompt
+        else:
+            system_prompt = "/no_think\n" + base_system_prompt
+
         try:
-            # vLLM 연결 전에 thinking 상태 전송 (Thinking 모델은 첫 응답까지 오래 걸림)
-            yield f"data: {json.dumps({'thinking': True})}\n\n"
+            # Thinking 모델일 때만 thinking 상태 전송
+            if is_thinking_model:
+                yield f"data: {json.dumps({'thinking': True})}\n\n"
 
             async with httpx.AsyncClient(timeout=httpx.Timeout(300.0, read=300.0)) as client:
                 async with client.stream(
@@ -569,50 +576,56 @@ async def analyze_result(
                         yield f"data: {json.dumps({'error': f'vLLM error: {error_text.decode()}'})}\n\n"
                         return
 
-                    # Thinking 모델 대응: thinking 상태를 실시간으로 전송
-                    buffer = ""
-                    report_started = False
-                    think_end_tag = "</think>"
+                    if is_thinking_model:
+                        # Thinking 모델: </think> 태그까지 버퍼링
+                        buffer = ""
+                        report_started = False
+                        think_end_tag = "</think>"
 
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            data = line[6:]
-                            if data == "[DONE]":
-                                # 버퍼에 남은 내용이 있으면 출력 (thinking이 없었던 경우)
-                                if buffer and not report_started:
-                                    yield f"data: {json.dumps({'content': buffer})}\n\n"
-                                yield "data: [DONE]\n\n"
-                                break
-                            try:
-                                chunk = json.loads(data)
-                                content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
-                                if content:
-                                    if report_started:
-                                        # 보고서 시작된 후에는 바로 출력
+                        async for line in response.aiter_lines():
+                            if line.startswith("data: "):
+                                data = line[6:]
+                                if data == "[DONE]":
+                                    # 버퍼에 남은 내용이 있으면 출력
+                                    if buffer and not report_started:
+                                        yield f"data: {json.dumps({'thinking': False})}\n\n"
+                                        yield f"data: {json.dumps({'content': buffer})}\n\n"
+                                    yield "data: [DONE]\n\n"
+                                    break
+                                try:
+                                    chunk = json.loads(data)
+                                    content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                    if content:
+                                        if report_started:
+                                            yield f"data: {json.dumps({'content': content})}\n\n"
+                                        else:
+                                            buffer += content
+                                            # </think> 태그가 나오면 보고서 시작
+                                            if think_end_tag in buffer:
+                                                idx = buffer.find(think_end_tag)
+                                                remaining = buffer[idx + len(think_end_tag):].lstrip()
+                                                report_started = True
+                                                yield f"data: {json.dumps({'thinking': False})}\n\n"
+                                                if remaining:
+                                                    yield f"data: {json.dumps({'content': remaining})}\n\n"
+                                                buffer = ""
+                                except json.JSONDecodeError:
+                                    continue
+                    else:
+                        # Non-thinking 모델: 바로 스트리밍
+                        async for line in response.aiter_lines():
+                            if line.startswith("data: "):
+                                data = line[6:]
+                                if data == "[DONE]":
+                                    yield "data: [DONE]\n\n"
+                                    break
+                                try:
+                                    chunk = json.loads(data)
+                                    content = chunk.get("choices", [{}])[0].get("delta", {}).get("content", "")
+                                    if content:
                                         yield f"data: {json.dumps({'content': content})}\n\n"
-                                    else:
-                                        # 버퍼에 축적
-                                        buffer += content
-
-                                        # /no_think이 작동하면 바로 마크다운으로 시작
-                                        if buffer.lstrip().startswith("#") and len(buffer) > 50:
-                                            report_started = True
-                                            # thinking 종료 알림
-                                            yield f"data: {json.dumps({'thinking': False})}\n\n"
-                                            yield f"data: {json.dumps({'content': buffer.lstrip()})}\n\n"
-                                            buffer = ""
-                                        # </think> 태그가 나오면 보고서 시작
-                                        elif think_end_tag in buffer:
-                                            idx = buffer.find(think_end_tag)
-                                            remaining = buffer[idx + len(think_end_tag):].lstrip()
-                                            report_started = True
-                                            # thinking 종료 알림
-                                            yield f"data: {json.dumps({'thinking': False})}\n\n"
-                                            if remaining:
-                                                yield f"data: {json.dumps({'content': remaining})}\n\n"
-                                            buffer = ""
-                            except json.JSONDecodeError:
-                                continue
+                                except json.JSONDecodeError:
+                                    continue
         except httpx.ConnectError:
             yield f"data: {json.dumps({'error': f'vLLM 서버에 연결할 수 없습니다: {server_url}'})}\n\n"
         except Exception as e:

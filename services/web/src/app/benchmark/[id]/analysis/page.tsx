@@ -19,6 +19,7 @@ export default function AnalysisPage() {
   const [isThinking, setIsThinking] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasStarted, setHasStarted] = useState(false);
+  const [isThinkingModel, setIsThinkingModel] = useState(false);
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Fetch benchmark status and result
@@ -69,7 +70,7 @@ export default function AnalysisPage() {
       const model = status?.model || "";
 
       const response = await fetch(
-        `/api/v1/benchmark/result/${runId}/analysis?server_url=${encodeURIComponent(serverUrl)}&model=${encodeURIComponent(model)}`
+        `/api/v1/benchmark/result/${runId}/analysis?server_url=${encodeURIComponent(serverUrl)}&model=${encodeURIComponent(model)}&is_thinking_model=${isThinkingModel}`
       );
 
       if (!response.ok) {
@@ -169,7 +170,18 @@ export default function AnalysisPage() {
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* Thinking 모델 체크박스 */}
+          <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isThinkingModel}
+              onChange={(e) => setIsThinkingModel(e.target.checked)}
+              disabled={isGenerating}
+              className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+            />
+            <span>Thinking 모델</span>
+          </label>
           {/* Download 버튼 - 분석 완료 후에만 표시 */}
           {!isGenerating && analysis && (
             <button
