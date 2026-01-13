@@ -483,9 +483,18 @@ def _export_to_xlsx(result: dict) -> bytes:
 
 # Language instructions for AI analysis report
 LANGUAGE_INSTRUCTIONS = {
-    "ko": "한국어로 답변하세요.",
-    "en": "Write your response in English.",
-    "zh": "请用中文回答。",
+    "ko": {
+        "system": "한국어로 답변하세요.",
+        "prompt_suffix": "",  # Korean is the default, no suffix needed
+    },
+    "en": {
+        "system": "You MUST write your entire response in English. Do not use Korean.",
+        "prompt_suffix": "\n\n**IMPORTANT: Write your entire analysis report in English. All section headings, explanations, and conclusions must be in English.**",
+    },
+    "zh": {
+        "system": "你必须用中文撰写整个回复。不要使用韩语。",
+        "prompt_suffix": "\n\n**重要提示：请用中文撰写整个分析报告。所有章节标题、解释和结论都必须使用中文。**",
+    },
 }
 
 
@@ -534,21 +543,26 @@ async def analyze_result(
     analysis_model = model if model else result.get("model", "qwen3-14b")
 
     # Build analysis prompt
-    prompt = _build_analysis_prompt(result)
+    base_prompt = _build_analysis_prompt(result)
+
+    # Get language settings
+    lang_settings = LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS["ko"])
+    language_system = lang_settings["system"]
+    prompt_suffix = lang_settings["prompt_suffix"]
+
+    # Add language suffix to prompt if needed
+    prompt = base_prompt + prompt_suffix
 
     async def generate_analysis():
         """Stream analysis from vLLM."""
-        # Get language instruction
-        language_instruction = LANGUAGE_INSTRUCTIONS.get(language, LANGUAGE_INSTRUCTIONS["ko"])
-
         # System prompt with language instruction
         base_system_prompt = f"""당신은 LLM 서버 성능 분석 전문가입니다. 벤치마크 결과를 분석하여 마크다운 형식의 보고서를 작성합니다.
 
-[답변 원칙]
-- {language_instruction}
-- 전문 용어는 괄호 안에 간단한 설명 추가 (예: TTFT(첫 토큰 응답 시간))
-- 구조화된 마크다운 형식 사용
-- 핵심부터 설명, 불필요한 서론 생략"""
+        [답변 원칙]
+        - {language_system}
+        - 전문 용어는 괄호 안에 간단한 설명 추가 (예: TTFT(첫 토큰 응답 시간))
+        - 구조화된 마크다운 형식 사용
+        - 핵심부터 설명, 불필요한 서론 생략"""
 
         # Thinking 모델이 아니면 /no_think 지시어 추가
         if is_thinking_model:
@@ -713,77 +727,83 @@ def _build_analysis_prompt(result: dict) -> str:
     gpu_mem_util = vllm_config.get("gpu_memory_utilization") if vllm_config else None
 
     if gpu_mem_util:
-        gpu_metrics_note = f"""**참고**: 사용자가 제공한 vLLM 설정에 따르면 `gpu_memory_utilization={gpu_mem_util}` 입니다.
-GPU 메모리의 {gpu_mem_util * 100:.0f}%만 vLLM에 할당되므로, GPU 메트릭 해석 시 이를 고려하세요.
-예: GPU 메모리 사용률 {gpu_mem_util * 100 * 0.9:.0f}%는 vLLM 할당분의 약 90%를 사용 중입니다."""
+        gpu_metrics_note = f"""
+        **참고**: 사용자가 제공한 vLLM 설정에 따르면 `gpu_memory_utilization={gpu_mem_util}` 입니다.
+        GPU 메모리의 {gpu_mem_util * 100:.0f}%만 vLLM에 할당되므로, GPU 메트릭 해석 시 이를 고려하세요.
+        예: GPU 메모리 사용률 {gpu_mem_util * 100 * 0.9:.0f}%는 vLLM 할당분의 약 90%를 사용 중입니다.
+        """
     else:
-        gpu_metrics_note = """**주의**: GPU 메트릭은 시스템 전체 사용량입니다. vLLM 설정값이 제공되지 않았으므로 기본값(`gpu_memory_utilization=0.9`)을 가정합니다.
-GPU 메모리의 90%만 vLLM에 할당됩니다. 예를 들어 GPU 메모리 사용률 85%는 vLLM 할당분의 거의 전부를 사용 중일 수 있습니다."""
+        gpu_metrics_note = """
+        **주의**: GPU 메트릭은 시스템 전체 사용량입니다. vLLM 설정값이 제공되지 않았으므로 기본값(`gpu_memory_utilization=0.9`)을 가정합니다.
+        GPU 메모리의 90%만 vLLM에 할당됩니다. 예를 들어 GPU 메모리 사용률 85%는 vLLM 할당분의 거의 전부를 사용 중일 수 있습니다.
+        """
 
-    prompt = f"""다음 LLM 서버 벤치마크 결과를 분석해주세요.
+    prompt = f"""
+    다음 LLM 서버 벤치마크 결과를 분석해주세요.
 
-{infra_section}
+    {infra_section}
 
-{workload_section}
+    {workload_section}
 
-## 테스트 요약
-- **모델**: {model}
-- **서버**: {server_url}
-- **테스트 시간**: {duration:.1f}초
+    ## 테스트 요약
+    - **모델**: {model}
+    - **서버**: {server_url}
+    - **테스트 시간**: {duration:.1f}초
 
-## 성능 요약
-- **최고 처리량**: {best_throughput:.1f} tok/s (동시성 {concurrency_summary}에서)
-- **최저 TTFT p50**: {best_ttft_p50:.1f} ms
-- **전체 에러율**: {overall_error_rate:.2f}%
-- **평균 Goodput**: {goodput_summary}
+    ## 성능 요약
+    - **최고 처리량**: {best_throughput:.1f} tok/s (동시성 {concurrency_summary}에서)
+    - **최저 TTFT p50**: {best_ttft_p50:.1f} ms
+    - **전체 에러율**: {overall_error_rate:.2f}%
+    - **평균 Goodput**: {goodput_summary}
 
-## Concurrency별 상세 결과
-{results_table}
+    ## Concurrency별 상세 결과
+    {results_table}
 
----
+    ---
 
-## 분석 요청
+    ## 분석 요청
 
-위 벤치마크 결과와 **서버 인프라 환경을 고려하여** 전문가 보고서를 작성해주세요.
+    위 벤치마크 결과와 **서버 인프라 환경을 고려하여** 전문가 보고서를 작성해주세요.
 
-**[용어 설명 규칙]**
-- 전문 용어는 처음 사용 시 괄호 안에 간단한 설명 추가
-- 예: "TTFT(첫 토큰 응답 시간)", "Throughput(처리량)", "Goodput(SLA 충족 비율)"
+    **[용어 설명 규칙]**
+    - 전문 용어는 처음 사용 시 괄호 안에 간단한 설명 추가
+    - 예: "TTFT(첫 토큰 응답 시간)", "Throughput(처리량)", "Goodput(SLA 충족 비율)"
 
-**[분석 항목]**
+    **[분석 항목]**
 
-# 1. 환경 요약
-서버 인프라(GPU, CPU, 메모리)와 테스트 환경을 간략히 정리하세요.
+    # 1. 환경 요약
+    서버 인프라(GPU, CPU, 메모리)와 테스트 환경을 간략히 정리하세요.
 
-# 2. 성능 개요
-GPU 스펙 대비 성능을 평가하세요. 처리량과 응답 시간의 전반적인 수준을 분석하세요.
+    # 2. 성능 개요
+    GPU 스펙 대비 성능을 평가하세요. 처리량과 응답 시간의 전반적인 수준을 분석하세요.
 
-# 3. Concurrency 영향 분석
-동시성 증가에 따른 성능 변화 패턴을 분석하세요. 표 데이터를 기반으로 구체적인 수치를 인용하세요.
+    # 3. Concurrency 영향 분석
+    동시성 증가에 따른 성능 변화 패턴을 분석하세요. 표 데이터를 기반으로 구체적인 수치를 인용하세요.
 
-# 4. 병목 원인 분석 (증거 기반)
-성능 저하 지점을 식별하고, 데이터를 근거로 병목 원인을 분석하세요.
+    # 4. 병목 원인 분석 (증거 기반)
+    성능 저하 지점을 식별하고, 데이터를 근거로 병목 원인을 분석하세요.
 
-{gpu_metrics_note}
+    {gpu_metrics_note}
 
-다음 형식을 따르세요:
-- **가설**: [성능 저하 원인 추정]
-- **증거**: [GPU 메트릭, 에러율, TTFT/처리량 변화 등 데이터 인용]
-- **검증**: [다른 가능한 원인 배제 또는 추가 확인 필요 사항]
+    다음 형식을 따르세요:
+    - **가설**: [성능 저하 원인 추정]
+    - **증거**: [GPU 메트릭, 에러율, TTFT/처리량 변화 등 데이터 인용]
+    - **검증**: [다른 가능한 원인 배제 또는 추가 확인 필요 사항]
 
-# 5. 권장 운영 동시성
-최적 동시성 레벨과 그 근거를 제시하세요. SLA(예: TTFT p99 < 500ms) 충족 여부를 고려하세요.
+    # 5. 권장 운영 동시성
+    최적 동시성 레벨과 그 근거를 제시하세요. SLA(예: TTFT p99 < 500ms) 충족 여부를 고려하세요.
 
-# 6. 개선 제안
-다음 측면에서 우선순위가 높은 개선안을 제시하세요:
-- **인프라**: GPU 추가, 메모리 최적화
-- **설정**: max_num_seqs, gpu_memory_utilization 조정
-- **모델**: 양자화, context length 최적화
+    # 6. 개선 제안
+    다음 측면에서 우선순위가 높은 개선안을 제시하세요:
+    - **인프라**: GPU 추가, 메모리 최적화
+    - **설정**: max_num_seqs, gpu_memory_utilization 조정
+    - **모델**: 양자화, context length 최적화
 
-# 7. 모니터링 권장안
-운영 시 모니터링해야 할 주요 메트릭과 알람 임계값을 제안하세요.
+    # 7. 모니터링 권장안
+    운영 시 모니터링해야 할 주요 메트릭과 알람 임계값을 제안하세요.
 
-각 항목을 **마크다운 헤딩(#)으로 구분**하여 작성해주세요."""
+    각 항목을 **마크다운 헤딩(#)으로 구분**하여 작성해주세요.
+    """
 
     return prompt
 

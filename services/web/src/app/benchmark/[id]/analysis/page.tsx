@@ -178,6 +178,17 @@ export default function AnalysisPage() {
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {/* Thinking Model Checkbox */}
+          <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={isThinkingModel}
+              onChange={(e) => setIsThinkingModel(e.target.checked)}
+              disabled={isGenerating}
+              className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
+            />
+            <span>Thinking Model</span>
+          </label>
           {/* Language Selector */}
           <div className="relative">
             <select
@@ -194,17 +205,6 @@ export default function AnalysisPage() {
             </select>
             <ChevronDown className="absolute right-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-500 pointer-events-none" />
           </div>
-          {/* Thinking Model Checkbox */}
-          <label className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={isThinkingModel}
-              onChange={(e) => setIsThinkingModel(e.target.checked)}
-              disabled={isGenerating}
-              className="w-4 h-4 rounded border-gray-300 dark:border-gray-600 text-blue-600 focus:ring-blue-500 disabled:opacity-50"
-            />
-            <span>Thinking Model</span>
-          </label>
           <button
             onClick={startAnalysis}
             disabled={isGenerating}
