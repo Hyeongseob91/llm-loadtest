@@ -78,6 +78,7 @@ Thumbs.db
 *.db
 *.sqlite
 *.sqlite3
+data
 
 # Claude Memory (optional - uncomment if you want to ignore)
 # .claude/memory/
