@@ -9,7 +9,7 @@ import { MetricCard } from "@/components/metric-card";
 import { useBenchmarkProgress } from "@/hooks/useBenchmarkProgress";
 import { RequestLogPanel } from "@/components/RequestLogPanel";
 import { ValidationLogPanel } from "@/components/ValidationLogPanel";
-import { Gauge, Clock, Activity, AlertCircle, CheckCircle, CheckCircle2, XCircle, Loader2, FileText, Zap, Timer, ShieldCheck, AlertTriangle } from "lucide-react";
+import { Gauge, Clock, Activity, AlertCircle, CheckCircle, CheckCircle2, XCircle, Loader2, FileText, Zap, Timer, ShieldCheck, AlertTriangle, StopCircle } from "lucide-react";
 import {
   LineChart,
   Line,
@@ -59,7 +59,7 @@ export default function BenchmarkResultPage() {
     queryFn: () => api.getResult(runId),
     refetchInterval: (query) => {
       if (status?.status === "running") return 3000;
-      if (status?.status === "completed" && !query.state.data?.summary) return 2000;
+      if ((status?.status === "completed" || status?.status === "cancelled") && !query.state.data?.summary) return 2000;
       return false;
     },
   });
@@ -71,7 +71,21 @@ export default function BenchmarkResultPage() {
   );
 
   const isRunning = status?.status === "running";
+  const isCancelled = status?.status === "cancelled";
+  const showResults = status?.status === "completed" || isCancelled;
   const startedAt = status?.started_at ? new Date(status.started_at) : null;
+  const [isStopping, setIsStopping] = useState(false);
+
+  const handleStop = async () => {
+    if (!confirm("벤치마크를 중지하시겠습니까? 지금까지의 부분 결과는 보존됩니다.")) return;
+    setIsStopping(true);
+    try {
+      await api.stopBenchmark(runId);
+    } catch (e) {
+      console.error("Failed to stop benchmark:", e);
+      setIsStopping(false);
+    }
+  };
 
   // 경과시간을 매초 업데이트
   const [elapsed, setElapsed] = useState(0);
@@ -214,7 +228,7 @@ export default function BenchmarkResultPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-            {isRunning ? "Benchmark Running" : "Benchmark Result"}
+            {isRunning ? "Benchmark Running" : isCancelled ? "Benchmark Stopped" : "Benchmark Result"}
           </h1>
           <p className="mt-1 text-gray-600 dark:text-gray-400">
             {status?.model} @ {status?.server_url}
@@ -225,13 +239,33 @@ export default function BenchmarkResultPage() {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          {/* Stop Button */}
+          {isRunning && (
+            <button
+              onClick={handleStop}
+              disabled={isStopping}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              <StopCircle className="h-4 w-4" />
+              {isStopping ? "중지 중..." : "중지"}
+            </button>
+          )}
           {/* Status Badge */}
-          <div className={`flex items-center gap-2 ${isRunning ? "text-blue-600 dark:text-blue-400" : "text-green-600 dark:text-green-400"}`}>
+          <div className={`flex items-center gap-2 ${
+            isRunning ? "text-blue-600 dark:text-blue-400" :
+            isCancelled ? "text-yellow-600 dark:text-yellow-400" :
+            "text-green-600 dark:text-green-400"
+          }`}>
             {isRunning ? (
               <>
                 <Loader2 className="h-5 w-5 animate-spin" />
                 <span className="font-medium">진행 중</span>
+              </>
+            ) : isCancelled ? (
+              <>
+                <StopCircle className="h-5 w-5" />
+                <span className="font-medium">중지됨</span>
               </>
             ) : (
               <>
@@ -459,8 +493,8 @@ export default function BenchmarkResultPage() {
         <ValidationLogPanel logs={validationLogs} isRunning={isRunning} />
       )}
 
-      {/* Summary Cards - 완료 후에만 표시 (Running 중에는 숨김) */}
-      {!isRunning && (
+      {/* Summary Cards - 완료/중지 후 표시 (Running 중에는 숨김) */}
+      {showResults && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <MetricCard
             title="Best Throughput"
@@ -491,8 +525,8 @@ export default function BenchmarkResultPage() {
         </div>
       )}
 
-      {/* Goodput Summary - 완료 후에만 표시 */}
-      {!isRunning && result?.summary?.avg_goodput_percent !== undefined && (
+      {/* Goodput Summary - 완료/중지 후 표시 */}
+      {showResults && result?.summary?.avg_goodput_percent !== undefined && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
             Goodput
@@ -508,8 +542,8 @@ export default function BenchmarkResultPage() {
         </div>
       )}
 
-      {/* Validation Results - 완료 후 검증 결과가 있을 때만 표시 */}
-      {!isRunning && result?.validation && (
+      {/* Validation Results - 완료/중지 후 검증 결과가 있을 때만 표시 */}
+      {showResults && result?.validation && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center gap-3 mb-6">
             <ShieldCheck className="h-6 w-6 text-blue-600 dark:text-blue-400" />
@@ -643,8 +677,8 @@ export default function BenchmarkResultPage() {
         </div>
       )}
 
-      {/* Chart - 완료 후에만 표시 */}
-      {!isRunning && chartData.length > 0 && (
+      {/* Chart - 완료/중지 후 표시 */}
+      {showResults && chartData.length > 0 && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700 p-6">
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
@@ -740,8 +774,8 @@ export default function BenchmarkResultPage() {
         </div>
       )}
 
-      {/* Results Table - 완료 후에만 표시 */}
-      {!isRunning && (
+      {/* Results Table - 완료/중지 후 표시 */}
+      {showResults && (
         <div className="bg-white dark:bg-gray-800 rounded-xl shadow-sm border border-gray-200 dark:border-gray-700">
           <div className="p-4 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white">

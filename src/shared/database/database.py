@@ -156,6 +156,20 @@ class Database:
             )
             conn.commit()
 
+    def save_partial_result(self, run_id: str, result: dict) -> None:
+        """Save partial benchmark result with cancelled status."""
+        now_kst = datetime.now(KST).isoformat()
+        with self._get_connection() as conn:
+            conn.execute(
+                """
+                UPDATE benchmark_runs
+                SET result_json = ?, status = 'cancelled', completed_at = ?
+                WHERE id = ?
+                """,
+                (json.dumps(result, default=str), now_kst, run_id),
+            )
+            conn.commit()
+
     def get_run(self, run_id: str) -> Optional[dict]:
         """Get a benchmark run by ID."""
         with self._get_connection() as conn:

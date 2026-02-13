@@ -144,6 +144,27 @@ class ConnectionManager:
 
         await self.broadcast(run_id, message)
 
+    async def send_cancelled(
+        self,
+        run_id: str,
+        details: Optional[dict] = None,
+    ) -> None:
+        """Send cancellation notification.
+
+        Args:
+            run_id: Benchmark run ID.
+            details: Optional details about the cancellation.
+        """
+        message = {
+            "type": "cancelled",
+            "run_id": run_id,
+            "status": "cancelled",
+        }
+        if details:
+            message["details"] = details
+
+        await self.broadcast(run_id, message)
+
     async def send_failed(
         self,
         run_id: str,

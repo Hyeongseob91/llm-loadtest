@@ -45,7 +45,7 @@ export interface ValidationLogEntry {
 }
 
 export interface BenchmarkProgress {
-  type: "progress" | "completed" | "failed" | "validation_log";
+  type: "progress" | "completed" | "failed" | "cancelled" | "validation_log";
   run_id: string;
   status: string;
   progress?: ProgressData;
@@ -219,8 +219,8 @@ export function useBenchmarkProgress(
             setValidationLogs((prev) => [...prev, validationEntry]);
           }
 
-          // Stop reconnecting if completed or failed
-          if (data.type === "completed" || data.type === "failed") {
+          // Stop reconnecting if completed, failed, or cancelled
+          if (data.type === "completed" || data.type === "failed" || data.type === "cancelled") {
             reconnectAttemptsRef.current = maxReconnectAttempts;
           }
         } catch (e) {

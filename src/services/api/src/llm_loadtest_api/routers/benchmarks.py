@@ -202,6 +202,36 @@ async def list_runs(
     )
 
 
+@router.post("/run/{run_id}/stop", dependencies=[Depends(APIKeyAuth(required=True))])
+async def stop_benchmark(
+    run_id: str,
+    service: BenchmarkService = Depends(get_service),
+) -> dict:
+    """Stop a running benchmark gracefully.
+
+    Requires API key authentication via X-API-Key header.
+    Preserves partial results collected so far.
+    """
+    logger.info("benchmark_stop_request", run_id=run_id)
+
+    # Check if run exists
+    run = service.get_status(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Run not found")
+
+    # Check if run is actually running
+    if not service.is_running(run_id):
+        raise HTTPException(status_code=409, detail="Benchmark is not running")
+
+    stopped = service.stop_benchmark(run_id)
+    if not stopped:
+        raise HTTPException(status_code=409, detail="Failed to stop benchmark")
+
+    log_benchmark_event("benchmark_stopped", run_id=run_id)
+
+    return {"run_id": run_id, "status": "stopping"}
+
+
 @router.delete("/run/{run_id}", dependencies=[Depends(APIKeyAuth(required=True))])
 async def delete_run(
     run_id: str,

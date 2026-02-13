@@ -113,6 +113,7 @@ class LoadGenerator:
         output_len: int,
         stream: bool,
         progress_callback: Optional[ProgressCallback] = None,
+        stop_event: Optional[asyncio.Event] = None,
     ) -> tuple[list[RequestResult], float]:
         """Run concurrent requests at specified concurrency level.
 
@@ -139,7 +140,28 @@ class LoadGenerator:
 
         async def send_request(request_id: int) -> RequestResult:
             nonlocal completed, last_metrics_at
+            # Check stop_event before acquiring semaphore
+            if stop_event and stop_event.is_set():
+                return RequestResult(
+                    request_id=request_id,
+                    success=False,
+                    error_type="cancelled",
+                    ttft_ms=0,
+                    e2e_latency_ms=0,
+                    input_tokens=0,
+                    output_tokens=0,
+                )
             async with semaphore:
+                if stop_event and stop_event.is_set():
+                    return RequestResult(
+                        request_id=request_id,
+                        success=False,
+                        error_type="cancelled",
+                        ttft_ms=0,
+                        e2e_latency_ms=0,
+                        input_tokens=0,
+                        output_tokens=0,
+                    )
                 result = await self.adapter.send_request(
                     request_id, prompt, output_len, stream
                 )
@@ -200,6 +222,7 @@ class LoadGenerator:
         output_len: int,
         stream: bool,
         progress_callback: Optional[ProgressCallback] = None,
+        stop_event: Optional[asyncio.Event] = None,
     ) -> tuple[list[RequestResult], float]:
         """Run requests for a specified duration.
 
@@ -225,6 +248,8 @@ class LoadGenerator:
         async def worker():
             nonlocal request_id
             while time.perf_counter() < end_time:
+                if stop_event and stop_event.is_set():
+                    break
                 async with lock:
                     current_id = request_id
                     request_id += 1
@@ -257,6 +282,7 @@ class LoadGenerator:
         docker_enabled: bool = True,
         container_name: Optional[str] = None,
         validation_progress_callback: Optional[callable] = None,
+        stop_event: Optional[asyncio.Event] = None,
     ) -> BenchmarkResult:
         """Run the load test.
 
@@ -290,6 +316,9 @@ class LoadGenerator:
         concurrency_results: list[ConcurrencyResult] = []
 
         for concurrency in config.concurrency:
+            if stop_event and stop_event.is_set():
+                break
+
             if progress_callback:
                 progress_callback(0, 1, f"Concurrency: {concurrency}")
 
@@ -302,6 +331,7 @@ class LoadGenerator:
                     output_len=config.output_len,
                     stream=config.stream,
                     progress_callback=progress_callback,
+                    stop_event=stop_event,
                 )
             else:
                 # Request count-based mode
@@ -312,15 +342,24 @@ class LoadGenerator:
                     output_len=config.output_len,
                     stream=config.stream,
                     progress_callback=progress_callback,
+                    stop_event=stop_event,
                 )
 
+            # Filter out cancelled results for metrics calculation
+            valid_results = [r for r in results if r.error_type != "cancelled"]
+            if not valid_results:
+                break
+
             concurrency_result = MetricsCalculator.aggregate_results(
-                results,
+                valid_results,
                 duration,
                 concurrency,
                 goodput_thresholds=config.goodput_thresholds,
             )
             concurrency_results.append(concurrency_result)
+
+            if stop_event and stop_event.is_set():
+                break
 
         completed_at = datetime.now()
         total_duration = (completed_at - started_at).total_seconds()

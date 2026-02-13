@@ -29,7 +29,7 @@ class BenchmarkService:
 
     def __init__(self, db: Database):
         self.db = db
-        self._running_tasks: dict[str, asyncio.Task] = {}
+        self._running_tasks: dict[str, tuple[asyncio.Task, asyncio.Event]] = {}
 
     async def start_benchmark(self, request: BenchmarkRequest) -> str:
         """Start a new benchmark run.
@@ -91,11 +91,12 @@ class BenchmarkService:
             config=config.model_dump(),
         )
 
-        # Start background task
+        # Start background task with stop event
+        stop_event = asyncio.Event()
         task = asyncio.create_task(
-            self._run_benchmark(run_id, config, vllm_config, validation_config)
+            self._run_benchmark(run_id, config, vllm_config, validation_config, stop_event)
         )
-        self._running_tasks[run_id] = task
+        self._running_tasks[run_id] = (task, stop_event)
 
         return run_id
 
@@ -105,6 +106,7 @@ class BenchmarkService:
         config: BenchmarkConfig,
         vllm_config: Optional[dict] = None,
         validation_config: Optional[dict] = None,
+        stop_event: Optional[asyncio.Event] = None,
     ) -> None:
         """Run benchmark in background.
 
@@ -218,6 +220,7 @@ class BenchmarkService:
                 docker_enabled=docker_enabled,
                 container_name=container_name,
                 validation_progress_callback=validation_progress_callback if enable_validation else None,
+                stop_event=stop_event,
             )
 
             # Stop GPU monitoring and collect metrics
@@ -249,10 +252,20 @@ class BenchmarkService:
             result_dict = result.model_dump(mode="json")
             result_dict["summary"] = result.get_summary()
             result_dict["server_infra"] = server_infra
-            self.db.save_result(run_id, result_dict)
 
-            # Send completed message via WebSocket
-            await manager.send_completed(run_id, {"status": "completed"})
+            # Check if benchmark was stopped
+            if stop_event and stop_event.is_set():
+                self.db.save_partial_result(run_id, result_dict)
+                await manager.send_cancelled(run_id, {"status": "cancelled"})
+            else:
+                self.db.save_result(run_id, result_dict)
+                await manager.send_completed(run_id, {"status": "completed"})
+
+        except asyncio.CancelledError:
+            # Task was cancelled (e.g. via delete_run)
+            self.db.update_status(run_id, "cancelled")
+            await manager.send_cancelled(run_id, {"status": "cancelled"})
+            print(f"[BenchmarkService] Run {run_id} cancelled")
 
         except Exception as e:
             # Update status to failed
@@ -335,11 +348,32 @@ class BenchmarkService:
         """List benchmark runs."""
         return self.db.list_runs(limit, offset, status)
 
+    def stop_benchmark(self, run_id: str) -> bool:
+        """Stop a running benchmark gracefully.
+
+        Args:
+            run_id: The benchmark run ID to stop.
+
+        Returns:
+            True if the stop signal was sent, False if run not found.
+        """
+        if run_id not in self._running_tasks:
+            return False
+        _, stop_event = self._running_tasks[run_id]
+        stop_event.set()
+        return True
+
+    def is_running(self, run_id: str) -> bool:
+        """Check if a benchmark is currently running."""
+        return run_id in self._running_tasks
+
     def delete_run(self, run_id: str) -> bool:
         """Delete a benchmark run."""
         # Cancel if running
         if run_id in self._running_tasks:
-            self._running_tasks[run_id].cancel()
+            task, stop_event = self._running_tasks[run_id]
+            stop_event.set()
+            task.cancel()
             del self._running_tasks[run_id]
 
         return self.db.delete_run(run_id)
