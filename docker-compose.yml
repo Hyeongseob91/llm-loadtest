@@ -1,7 +1,7 @@
 services:
   api:
     build:
-      context: .
+      context: ./src
       dockerfile: services/api/Dockerfile
     container_name: llm-loadtest-api
     ports:
@@ -29,7 +29,7 @@ services:
 
   web:
     build:
-      context: .
+      context: ./src
       dockerfile: services/web/Dockerfile
     container_name: llm-loadtest-web
     ports:
